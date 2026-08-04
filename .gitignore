@@ -1,0 +1,12 @@
+.idea
+.vscode
+.DS_Store
+*.log
+*.pyc
+__pycache__/
+.venv/
+Thumbs.db
+datasets/
+log/
+otherlogs/
+*.pdf
