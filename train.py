@@ -58,17 +58,19 @@ def train() -> None:
     # *******************************************************************************************************
     train_set = TrainSetLoader_Re_Pad(dataset_dir=opt.dataset_dir, dataset_name=opt.dataset_name, patch_size=opt.patchSize,
                                img_norm_cfg=opt.img_norm_cfg)
-    train_loader = DataLoader(dataset=train_set, num_workers=opt.threads, batch_size=opt.batchSize, shuffle=True)
+    worker_options = {'persistent_workers': True} if opt.threads else {}
+    train_loader = DataLoader(dataset=train_set, num_workers=opt.threads, batch_size=opt.batchSize,
+                              shuffle=True, **worker_options)
 
     test_set = TestSetLoader_Re_Pad(opt.dataset_dir, opt.dataset_name, opt.dataset_name, opt.patchSize_eva,img_norm_cfg=opt.img_norm_cfg)
-    test_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False)
+    test_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1,
+                             shuffle=False, **worker_options)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = Net(model_name=opt.model_name, mode='train').to(device)
     net.apply(weights_init_kaiming)
     net.train()
     total_loss_list = []
-    total_loss_epoch = []
 
     if not os.path.exists(opt.log_dir):
         os.makedirs(opt.log_dir)
@@ -91,32 +93,32 @@ def train() -> None:
         net.train()
         results1 = [0, 0]
         results2 = [0, 1]
-        for idx_iter, (img, gt_mask) in enumerate(train_loader):
+        optimizer_steps = 0
+        for img, gt_mask in train_loader:
             img, gt_mask = Variable(img).to(device), Variable(gt_mask).to(device)
-            if img.shape[0] == 1:
-                continue
-            # print(img.shape)
             pred = net.forward(img)
-            # gt_mask = gt_mask.float()
             loss = net.loss(pred, gt_mask)
-            total_loss_epoch.append(loss.detach().cpu())
             epoch_loss_values.append(float(loss.detach().cpu()))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            if opt.max_train_steps is not None and idx_iter + 1 >= opt.max_train_steps:
+            optimizer_steps += 1
+            if opt.max_train_steps is not None and optimizer_steps >= opt.max_train_steps:
                 break
+        if not epoch_loss_values:
+            raise RuntimeError('No optimization steps completed in this epoch.')
         scheduler.step()
 
+        epoch_loss = float(np.mean(epoch_loss_values))
+        total_loss_list.append(epoch_loss)
+
         if (idx_epoch + 1) % opt.every_print == 0:  # tensorboard : write train loss
-            total_loss_list.append(float(np.array(total_loss_epoch).mean()))
-            print(time.ctime()[4:-5] + ' Epoch---%d, total_loss---%f, lr---%f,'
-                  % (idx_epoch + 1, total_loss_list[-1], scheduler.get_last_lr()[0]))
-            opt.f.write(time.ctime()[4:-5] + ' Epoch---%d, total_loss---%f,\n'
-                        % (idx_epoch + 1, total_loss_list[-1]))
-            total_loss_epoch = []
+            print(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f, lr---%f,'
+                  % (idx_epoch + 1, epoch_loss, scheduler.get_last_lr()[0]))
+            opt.f.write(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f,\n'
+                        % (idx_epoch + 1, epoch_loss))
             # Log the scalar values
-            writer.add_scalar('loss', total_loss_list[-1], idx_epoch + 1)
+            writer.add_scalar('loss', epoch_loss, idx_epoch + 1)
             writer.add_scalar('lr', scheduler.get_last_lr()[0], idx_epoch + 1)
 
         if idx_epoch == 0:
@@ -132,7 +134,7 @@ def train() -> None:
             with torch.no_grad():
                 eval_mIoU = mIoU()
                 eval_PD_FA = PD_FA()
-                Metric = F1()
+                Metric = F1(opt.threshold)
                 # test_loss = []
                 for idx_iter, (img, gt_mask, target_size, org_size, _) in enumerate(test_loader):
                     img = Variable(img).to(device)
@@ -199,12 +201,6 @@ def train() -> None:
                     'total_loss': total_loss_list,
                 }, save_pth)
 
-        if epoch_loss_values:
-            epoch_loss = float(np.mean(epoch_loss_values))
-        elif total_loss_list:
-            epoch_loss = total_loss_list[-1]
-        else:
-            epoch_loss = None
         evaluated = (idx_epoch + 1) >= opt.begin_test and (idx_epoch + 1) % opt.every_test == 0
         record = {
             'run_id': f'{opt.dataset_name}_{opt.model_name}',

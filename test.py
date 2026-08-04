@@ -40,22 +40,23 @@ parser.add_argument("--threshold", type=float, default=0.5)
 parser.add_argument("--max_test_steps", type=int, default=None,
                     help="Optional cap on evaluated batches (useful for smoke tests)")
 
-global opt
-opt = parser.parse_args()
+opt = None
 
 
 def test() -> None:
     test_set = TestSetLoader_Re_Pad(opt.dataset_dir, opt.train_dataset_name, opt.test_dataset_name, opt.patchSize_eva,
                                     opt.img_norm_cfg)
-    test_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False)
+    worker_options = {'persistent_workers': True} if opt.threads else {}
+    test_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False,
+                             **worker_options)
     # *************************固定阈值**********************
-    # 计算mIOU 
+    # 计算mIOU
     IOU = mIoU()
     # 计算nIOU
-    nIoU_metric = SamplewiseSigmoidMetric(nclass=1, score_thresh=0)
-    # 计算PD_FA 
+    nIoU_metric = SamplewiseSigmoidMetric(nclass=1, score_thresh=opt.threshold)
+    # 计算PD_FA
     eval_05 = PD_FA()
-    ROC_05 = ROCMetric05(nclass=1, bins=10)
+    metric_f1 = F1(opt.threshold)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = SP_KAN(1, 1, mode='test', deepsuper=True).to(device)
@@ -90,7 +91,7 @@ def test() -> None:
             # nIOU
             nIoU_metric.update(pred, gt_mask)  # 像素
             eval_05.update((pred[0, 0, :, :] > opt.threshold).cpu(), gt_mask[0, 0, :, :], org_size)  # 目标
-            ROC_05.update(pred, gt_mask)
+            metric_f1.update(pred, gt_mask)
             # ROC_05.update
             # save img
             if opt.save_img == True:
@@ -121,7 +122,7 @@ def test() -> None:
 
         results2 = eval_05.get()
 
-        ture_positive_rate, false_positive_rate, recall, precision, FP, F1_score = ROC_05.get()
+        F1_score = metric_f1.get()
 
         print('pixAcc: %.4f| mIoU: %.4f | nIoU: %.4f | Pd: %.4f| Fa: %.4f |F1: %.4f'
               % (pixAcc * 100, mIOU * 100, nIoU * 100, results2[0] * 100, results2[1] * 1e+6, F1_score * 100))
@@ -255,11 +256,11 @@ def batch_intersection_union_n(output, target, nclass, score_thresh):
     outputnp = output.detach().cpu().numpy()
     # outputsig = F.sigmoid(output).detach().cpu().numpy()
     # outputsig = nd.sigmoid(output).asnumpy()
-    predict = (outputnp > 0.5).astype('int64')
+    predict = (outputnp > score_thresh).astype('int64')
     # predict = predict.detach().cpu().numpy()
     # predict = (output.asnumpy() > 0).astype('int64') # P
     if len(target.shape) == 3:
-        target = nd.expand_dims(target, axis=1).asnumpy().astype('int64')  # T
+        target = target.unsqueeze(1).cpu().numpy().astype('int64')  # T
     elif len(target.shape) == 4:
         target = target.cpu().numpy().astype('int64')  # T
     else:
@@ -525,40 +526,43 @@ class PD_FA():
         self.PD = np.zeros([self.bins + 1])
 
 
-if __name__ == '__main__':
+def _broadcast(values, count, name):
+    if len(values) == 1:
+        return values * count
+    if len(values) != count:
+        raise ValueError(f'{name} must contain one value or exactly {count} values.')
+    return values
+
+
+def evaluation_jobs(model_names, dataset_names, checkpoint_paths):
+    count = max(len(model_names), len(dataset_names), len(checkpoint_paths))
+    return zip(
+        _broadcast(model_names, count, '--model_names'),
+        _broadcast(dataset_names, count, '--dataset_names'),
+        _broadcast(checkpoint_paths, count, '--pth_dirs'),
+    )
+
+
+def main():
+    global opt
+    opt = parser.parse_args()
     os.makedirs(opt.save_log, exist_ok=True)
     opt.metrics_path = os.path.join(opt.save_log, 'test_metrics.jsonl')
-    opt.f = open(os.path.join(opt.save_log, 'test_' + (time.ctime()).replace(' ', '_').replace(':', '_') + '.txt'), 'w')
-    if opt.pth_dirs == None:
-        for i in range(len(opt.model_names)):
-            opt.model_name = opt.model_names[i]
-            print(opt.model_name)
-            opt.f.write(opt.model_name + '_400.pth.tar' + '\n')
-            for dataset_name in opt.dataset_names:
-                opt.dataset_name = dataset_name
-                opt.train_dataset_name = opt.dataset_name
-                opt.test_dataset_name = opt.dataset_name
-                print(dataset_name)
-                opt.f.write(opt.dataset_name + '\n')
-                opt.pth_dir = opt.save_log + opt.dataset_name + '/' + opt.model_name + '_400.pth.tar'
-                test()
-            print('\n')
+    log_path = os.path.join(opt.save_log, 'test_' + time.strftime('%Y%m%d_%H%M%S') + '.txt')
+    with open(log_path, 'w') as opt.f:
+        for model_name, dataset_name, pth_dir in evaluation_jobs(
+                opt.model_names, opt.dataset_names, opt.pth_dirs):
+            opt.model_name = model_name
+            opt.train_dataset_name = dataset_name
+            opt.test_dataset_name = dataset_name
+            opt.pth_dir = pth_dir if os.path.isabs(pth_dir) else os.path.join(opt.save_log, pth_dir)
+            print(pth_dir)
+            print(dataset_name)
+            opt.f.write(f'{pth_dir}\n{dataset_name}\n')
+            test()
+            print()
             opt.f.write('\n')
-        opt.f.close()
-    else:
-        for model_name in opt.model_names:
-            for dataset_name in opt.dataset_names:
-                for pth_dir in opt.pth_dirs:
-                    # if dataset_name in pth_dir and model_name in pth_dir:
-                    opt.test_dataset_name = dataset_name
-                    opt.model_name = model_name
-                    opt.train_dataset_name = dataset_name
-                    print(pth_dir)
-                    opt.f.write(pth_dir)
-                    print(opt.test_dataset_name)
-                    opt.f.write(opt.test_dataset_name + '\n')
-                    opt.pth_dir = os.path.join(opt.save_log, pth_dir)
-                    test()
-                    print('\n')
-                    opt.f.write('\n')
-        opt.f.close()
+
+
+if __name__ == '__main__':
+    main()

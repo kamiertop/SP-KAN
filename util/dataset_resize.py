@@ -21,6 +21,10 @@ class TrainSetLoader_Re_Pad(Dataset):
             self.img_norm_cfg = img_norm_cfg
         self.tranform = augumentation()
         self._cache = {}
+        self._preload()
+
+    def _preload(self):
+        self._cache = {idx: self._load_item(idx) for idx in range(len(self.train_list))}
 
     def _load_item(self, idx):
         try:
@@ -83,6 +87,10 @@ class TestSetLoader_Re_Pad(Dataset):
         else:
             self.img_norm_cfg = img_norm_cfg
         self._cache = {}
+        self._preload()
+
+    def _preload(self):
+        self._cache = {idx: self._load_item(idx) for idx in range(len(self.test_list))}
 
     def _load_item(self, idx):
         try:
