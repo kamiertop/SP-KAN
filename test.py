@@ -21,8 +21,8 @@ from skimage import measure
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 parser = argparse.ArgumentParser(description="PyTorch BasicIRSTD test")
-parser.add_argument("--model_names", default=['SP_KAN'], nargs='+',
-                    help="model_name: 'ACM', 'DNANet', 'ISNet', 'ISTDU-Net'")
+parser.add_argument("--model_names", default=['SP_KAN'], nargs='+', choices=['SP_KAN'],
+                    help="Model architecture to evaluate")
 parser.add_argument("--pth_dirs", default=['SIRST3/SP-KAN-best.pth.tar'], nargs='+')
 parser.add_argument("--dataset_dir", default=r'./datasets', type=str, help="train_dataset_dir")
 parser.add_argument("--dataset_names", default=['SIRST3'], nargs='+',
@@ -535,6 +535,9 @@ def _broadcast(values, count, name):
 
 
 def evaluation_jobs(model_names, dataset_names, checkpoint_paths):
+    unsupported = set(model_names) - {'SP_KAN'}
+    if unsupported:
+        raise ValueError(f'Unsupported model names: {sorted(unsupported)}')
     count = max(len(model_names), len(dataset_names), len(checkpoint_paths))
     return zip(
         _broadcast(model_names, count, '--model_names'),

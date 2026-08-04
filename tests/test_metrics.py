@@ -28,6 +28,8 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(jobs, [('SP_KAN', 'SIRST3', 'a.pth'), ('SP_KAN', 'NUDT-SIRST', 'b.pth')])
         with self.assertRaises(ValueError):
             list(evaluation_jobs(['a', 'b'], ['x', 'y', 'z'], ['only.pth']))
+        with self.assertRaises(ValueError):
+            list(evaluation_jobs(['OtherModel'], ['SIRST3'], ['only.pth']))
 
 
 if __name__ == '__main__':
