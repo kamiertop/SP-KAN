@@ -1,7 +1,7 @@
 from util.utils import *
 from torchvision.transforms.functional import InterpolationMode
 import os
-from torchvision.transforms.functional import resize, to_pil_image  # type: ignore
+from torchvision.transforms.functional import resize  # type: ignore
 from torch.utils.data import Dataset
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
@@ -20,8 +20,9 @@ class TrainSetLoader_Re_Pad(Dataset):
         else:
             self.img_norm_cfg = img_norm_cfg
         self.tranform = augumentation()
+        self._cache = {}
 
-    def __getitem__(self, idx):
+    def _load_item(self, idx):
         try:
             img = Image.open(
                 (self.dataset_dir + '/images/' + self.train_list[idx] + '.png').replace('//', '/')).convert(
@@ -42,19 +43,27 @@ class TrainSetLoader_Re_Pad(Dataset):
         h,w = img.shape
         # resize
         target_size = PadImg_len(h, w, self.patch_size)
-        input_image = np.array(resize(to_pil_image(img), target_size, interpolation=InterpolationMode.BILINEAR))
-        # input_mask = np.array(resize(to_pil_image(mask), target_size, interpolation=InterpolationMode.BILINEAR))
-        input_mask = np.array(resize(to_pil_image(mask), target_size, interpolation=InterpolationMode.NEAREST))
+        # Resize tensors directly.  Converting normalized floats through PIL casts
+        # them to uint8, which both destroys the normalization and makes Conv2d/
+        # BCELoss fail at training time.
+        input_image = resize(
+            torch.from_numpy(img).unsqueeze(0), target_size,
+            interpolation=InterpolationMode.BILINEAR, antialias=True,
+        ).squeeze(0).numpy()
+        input_mask = resize(
+            torch.from_numpy(mask).unsqueeze(0), target_size,
+            interpolation=InterpolationMode.NEAREST,
+        ).squeeze(0).numpy()
 
-        img_patch, mask_patch = self.tranform(input_image, input_mask)  # 数据翻转增强
-        img_patch, mask_patch = img_patch[np.newaxis, :], mask_patch[np.newaxis, :]  # 升维
-        img_patch = torch.from_numpy(np.ascontiguousarray(img_patch))  # numpy 转tensor
-        mask_patch = torch.from_numpy(np.ascontiguousarray(mask_patch))  # numpy 转tensor
-        # pad
-        img_patch = preprocess(self.patch_size, img_patch)
-        mask_patch = preprocess(self.patch_size, mask_patch)
+        return input_image.astype(np.float32), input_mask.astype(np.float32)
 
-        return img_patch, mask_patch
+    def __getitem__(self, idx):
+        if idx not in self._cache:
+            self._cache[idx] = self._load_item(idx)
+        image, mask = self.tranform(*self._cache[idx])
+        image = preprocess(self.patch_size, torch.from_numpy(np.ascontiguousarray(image[None])).float())
+        mask = preprocess(self.patch_size, torch.from_numpy(np.ascontiguousarray(mask[None])).float())
+        return image, mask
 
     def __len__(self):
         return len(self.train_list)
@@ -73,8 +82,9 @@ class TestSetLoader_Re_Pad(Dataset):
             self.img_norm_cfg = get_img_norm_cfg(train_dataset_name, dataset_dir)
         else:
             self.img_norm_cfg = img_norm_cfg
+        self._cache = {}
 
-    def __getitem__(self, idx):
+    def _load_item(self, idx):
         try:
             img = Image.open((self.dataset_dir + '/images/' + self.test_list[idx] + '.png').replace('//', '/')).convert(
                 'I')
@@ -95,12 +105,15 @@ class TestSetLoader_Re_Pad(Dataset):
         h, w = img.shape
         # resize
         target_size = PadImg_len(h, w, self.patch_size_eva)
-        input_image = np.array(resize(to_pil_image(img), target_size))
+        input_image = resize(
+            torch.from_numpy(img).unsqueeze(0), target_size,
+            interpolation=InterpolationMode.BILINEAR, antialias=True,
+        ).squeeze(0).numpy()
 
 
         img, mask = input_image[np.newaxis, :], mask[np.newaxis, :]
-        img = torch.from_numpy(np.ascontiguousarray(img))
-        mask = torch.from_numpy(np.ascontiguousarray(mask))
+        img = torch.from_numpy(np.ascontiguousarray(img)).float()
+        mask = torch.from_numpy(np.ascontiguousarray(mask)).float()
         # pad
         img = preprocess(self.patch_size_eva, img)
 
@@ -108,6 +121,11 @@ class TestSetLoader_Re_Pad(Dataset):
         # mask = preprocess(self.patch_size_eva, mask)
 
         return img, mask, target_size, [h, w], self.test_list[idx]
+
+    def __getitem__(self, idx):
+        if idx not in self._cache:
+            self._cache[idx] = self._load_item(idx)
+        return self._cache[idx]
 
     def __len__(self):
         return len(self.test_list)

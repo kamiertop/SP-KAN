@@ -7,11 +7,10 @@ import os
 from einops import rearrange
 import numbers
 from model.Sin_KAN import SPKAL
-from timm.models.layers import DropPath, to_2tuple, trunc_normal_
+from timm.layers import DropPath, to_2tuple, trunc_normal_
 from thop import profile
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
 class conv_block(nn.Module):
@@ -219,7 +218,7 @@ class RelativePositionBias(nn.Module):
 
         coords_h = torch.arange(self.h)
         coords_w = torch.arange(self.w)
-        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, h, w
+        coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing='ij'))  # 2, h, w
         coords_flatten = torch.flatten(coords, 1)  # 2, hw
 
         relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]

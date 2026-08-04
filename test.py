@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import argparse
+import json
 import os
+from collections.abc import Sequence
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import threading
@@ -18,29 +21,33 @@ from skimage import measure
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 parser = argparse.ArgumentParser(description="PyTorch BasicIRSTD test")
-parser.add_argument("--model_names", default=['SP_KAN'], type=list,
+parser.add_argument("--model_names", default=['SP_KAN'], nargs='+',
                     help="model_name: 'ACM', 'DNANet', 'ISNet', 'ISTDU-Net'")
-parser.add_argument("--pth_dirs", default=['SIRST3/SP-KAN-best.pth.tar'], type=list)
+parser.add_argument("--pth_dirs", default=['SIRST3/SP-KAN-best.pth.tar'], nargs='+')
 parser.add_argument("--dataset_dir", default=r'./datasets', type=str, help="train_dataset_dir")
-parser.add_argument("--dataset_names", default=['SIRST3'], type=list,
+parser.add_argument("--dataset_names", default=['SIRST3'], nargs='+',
                     help="dataset_name: 'SIRST3','NUAA-SIRST', 'NUDT-SIRST', 'IRSTD-1K'")
 parser.add_argument("--patchSize_eva", type=int, default=512, help="Evaluation patch size")
-parser.add_argument("--img_norm_cfg", default=None, type=dict,
+parser.add_argument("--threads", type=int, default=0, help="Number of data loader workers")
+parser.add_argument("--img_norm_cfg", default=None,
                     help="specific a img_norm_cfg, default=None (using img_norm_cfg values of each dataset)")
-parser.add_argument("--save_img", default=True, type=bool, help="save image of or not")
+parser.add_argument("--save_img", "--save-img", default=True, action=argparse.BooleanOptionalAction,
+                    help="save image of or not")
 parser.add_argument("--save_img_dir", type=str, default=r'./Result/',
                     help="path of saved image")
 parser.add_argument("--save_log", type=str, default=r'./log/', help="path of saved .pth")
 parser.add_argument("--threshold", type=float, default=0.5)
+parser.add_argument("--max_test_steps", type=int, default=None,
+                    help="Optional cap on evaluated batches (useful for smoke tests)")
 
 global opt
 opt = parser.parse_args()
 
 
-def test():
+def test() -> None:
     test_set = TestSetLoader_Re_Pad(opt.dataset_dir, opt.train_dataset_name, opt.test_dataset_name, opt.patchSize_eva,
                                     opt.img_norm_cfg)
-    test_loader = DataLoader(dataset=test_set, num_workers=1, batch_size=1, shuffle=False)
+    test_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False)
     # *************************固定阈值**********************
     # 计算mIOU 
     IOU = mIoU()
@@ -50,13 +57,17 @@ def test():
     eval_05 = PD_FA()
     ROC_05 = ROCMetric05(nclass=1, bins=10)
 
-    net = SP_KAN(1, 1, mode='test', deepsuper=True)
-    state_dict = torch.load(opt.pth_dir)
-    # state_dict = torch.load(opt.pth_dir, map_location='cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    net = SP_KAN(1, 1, mode='test', deepsuper=True).to(device)
+    if not os.path.isfile(opt.pth_dir):
+        raise FileNotFoundError(
+            f'Checkpoint not found: {opt.pth_dir}. Set --pth_dirs to a checkpoint relative to --save_log.'
+        )
+    state_dict = torch.load(opt.pth_dir, map_location=device, weights_only=False)
     new_state_dict = OrderedDict()
     #
-    for k, v in state_dict['state_dict'].items():
-        name = k[6:]  # remove `module.`，表面从第7个key值字符取到最后一个字符，正好去掉了module.
+    for k, v in state_dict.get('state_dict', state_dict).items():
+        name = k.removeprefix('module.').removeprefix('model.')
         new_state_dict[name] = v  # 新字典的key值对应的value为一一对应的值。
     net.load_state_dict(new_state_dict)
     net.eval()
@@ -64,18 +75,18 @@ def test():
     with torch.no_grad():
         for idx_iter, (img, gt_mask, target_size, org_size, img_dir) in enumerate(tbar):
             # img = Variable(img)
-            pred = net.forward(img).cuda()
+            pred = net(img.to(device))
             # pred = pred[:, :, :size[0], :size[1]]
 
-            if pred.shape != gt_mask:
+            if pred.shape[-2:] != gt_mask.shape[-2:]:
                 pred = postprocess_masks(pred, target_size, org_size)
 
-            gt_mask = gt_mask.cuda()
+            gt_mask = gt_mask.to(device)
 
             pred = torch.clamp(pred, min=0.0, max=1.0)
             # Fix  threshold ##########################################################
             # IOU
-            IOU.update((pred > 0.5), gt_mask)  # 像素
+            IOU.update((pred > opt.threshold), gt_mask)  # 像素
             # nIOU
             nIoU_metric.update(pred, gt_mask)  # 像素
             eval_05.update((pred[0, 0, :, :] > opt.threshold).cpu(), gt_mask[0, 0, :, :], org_size)  # 目标
@@ -93,17 +104,14 @@ def test():
                 # B  显著图:
                 img_save_s = transforms.ToPILImage()((predB[0, 0, :, :]).cpu())
 
-                if not os.path.exists(opt.save_img_dir + opt.test_dataset_name + '/' + opt.model_name + '/' + 'Binary'):
-                    os.makedirs(opt.save_img_dir + opt.test_dataset_name + '/' + opt.model_name + '/' + 'Binary')
-                if not os.path.exists(
-                        opt.save_img_dir + opt.test_dataset_name + '/' + opt.model_name + '/' + 'Silance'):
-                    os.makedirs(opt.save_img_dir + opt.test_dataset_name + '/' + opt.model_name + '/' + 'Silance')
-                img_save_b.save(
-                    opt.save_img_dir + opt.test_dataset_name + '/' + opt.model_name + '/' + 'Binary' + '/' + img_dir[
-                        0] + '.png')
-                img_save_s.save(
-                    opt.save_img_dir + opt.test_dataset_name + '/' + opt.model_name + '/' + 'Silance' + '/' + img_dir[
-                        0] + '.png')
+                binary_dir = os.path.join(opt.save_img_dir, opt.test_dataset_name, opt.model_name, 'Binary')
+                silence_dir = os.path.join(opt.save_img_dir, opt.test_dataset_name, opt.model_name, 'Silance')
+                os.makedirs(binary_dir, exist_ok=True)
+                os.makedirs(silence_dir, exist_ok=True)
+                img_save_b.save(os.path.join(binary_dir, img_dir[0] + '.png'))
+                img_save_s.save(os.path.join(silence_dir, img_dir[0] + '.png'))
+            if opt.max_test_steps is not None and idx_iter + 1 >= opt.max_test_steps:
+                break
 
         # 0.5
 
@@ -117,17 +125,42 @@ def test():
 
         print('pixAcc: %.4f| mIoU: %.4f | nIoU: %.4f | Pd: %.4f| Fa: %.4f |F1: %.4f'
               % (pixAcc * 100, mIOU * 100, nIoU * 100, results2[0] * 100, results2[1] * 1e+6, F1_score * 100))
+        with open(opt.metrics_path, 'a') as metrics_file:
+            metrics_file.write(json.dumps({
+                'run_id': f'{opt.test_dataset_name}_{opt.model_name}',
+                'dataset': opt.test_dataset_name,
+                'model': opt.model_name,
+                'checkpoint': opt.pth_dir,
+                'threshold': opt.threshold,
+                'pixacc': float(pixAcc),
+                'miou': float(mIOU),
+                'niou': float(nIoU),
+                'pd': float(results2[0]),
+                'fa': float(results2[1]),
+                'f1': float(F1_score),
+            }, ensure_ascii=True) + '\n')
 
-
-def postprocess_masks(pred, input_size, original_size):
-
-    preds = pred[..., : input_size[0], : input_size[1]]
-    preds = F.interpolate(preds, original_size, mode="bicubic", align_corners=False)
+def postprocess_masks(
+    pred: torch.Tensor,
+    input_size: Sequence[int | torch.Tensor],
+    original_size: Sequence[int | torch.Tensor],
+) -> torch.Tensor:
+    input_h, input_w = (int(value.item()) if isinstance(value, torch.Tensor) else int(value)
+                        for value in input_size)
+    original_h, original_w = (int(value.item()) if isinstance(value, torch.Tensor) else int(value)
+                              for value in original_size)
+    preds = pred[..., :input_h, :input_w]
+    preds = F.interpolate(preds, (original_h, original_w), mode="bicubic", align_corners=False)
 
     return preds
 
 
-def cal_tp_pos_fp_neg(output, target, nclass, score_thresh):
+def cal_tp_pos_fp_neg(
+    output: torch.Tensor,
+    target: torch.Tensor,
+    nclass: int,
+    score_thresh: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     predict = (output > score_thresh).float()
     if len(target.shape) == 3:
         print('？？？？')  # 加一个维度 使得target与 output的size一致
@@ -241,16 +274,16 @@ def batch_intersection_union_n(output, target, nclass, score_thresh):
     for b in range(num_sample):
         # areas of intersection and union
         area_inter, _ = np.histogram(intersection[b], bins=nbins, range=(mini, maxi))
-        area_inter_arr[b] = area_inter
+        area_inter_arr[b] = area_inter.item()
 
         area_pred, _ = np.histogram(predict[b], bins=nbins, range=(mini, maxi))
-        area_pred_arr[b] = area_pred
+        area_pred_arr[b] = area_pred.item()
 
         area_lab, _ = np.histogram(target[b], bins=nbins, range=(mini, maxi))
-        area_lab_arr[b] = area_lab
+        area_lab_arr[b] = area_lab.item()
 
         area_union = area_pred + area_lab - area_inter
-        area_union_arr[b] = area_union
+        area_union_arr[b] = area_union.item()
 
         assert (area_inter <= area_union).all(), \
             "Intersection area should be smaller than Union area"
@@ -344,8 +377,8 @@ class PDFA():
         self.target = 0
 
     def update(self, preds, labels, size):
-        predits = np.array((preds).cpu()).astype('int64')
-        labelss = np.array((labels).cpu()).astype('int64')
+        predits = preds.detach().cpu().numpy().astype('int64')
+        labelss = labels.detach().cpu().numpy().astype('int64')
 
         image = measure.label(predits, connectivity=2)
         coord_image = measure.regionprops(image)
@@ -381,9 +414,11 @@ class PDFA():
         self.PD += len(self.distance_match)
 
     def get(self):
-        Final_FA = self.dismatch_pixel / self.all_pixel
-        Final_PD = self.PD / self.target
-        return Final_PD, float(Final_FA.cpu().detach().numpy())
+        if self.all_pixel == 0:
+            return 0.0, 0.0
+        final_fa = float(self.dismatch_pixel) / float(self.all_pixel)
+        final_pd = float(self.PD) / float(self.target) if self.target else 0.0
+        return final_pd, final_fa
 
     def reset(self):
         self.FA = np.zeros([self.bins + 1])
@@ -440,8 +475,8 @@ class PD_FA():
         self.target = 0
 
     def update(self, preds, labels, size):
-        predits = np.array((preds).cpu()).astype('int64')
-        labelss = np.array((labels).cpu()).astype('int64')
+        predits = preds.detach().cpu().numpy().astype('int64')
+        labelss = labels.detach().cpu().numpy().astype('int64')
 
         image = measure.label(predits, connectivity=2)
         coord_image = measure.regionprops(image)
@@ -475,13 +510,15 @@ class PD_FA():
 
         self.dismatch_pixel += np.sum(self.dismatch)  # Fa 虚警个数 像素的虚警
         # print(self.dismatch_pixel)
-        self.all_pixel += size[0] * size[1]
+        self.all_pixel += int(size[0]) * int(size[1])
         self.PD += len(self.distance_match)  # 如果中心点之间距离在3一下 就算Pd  所以Pd 是匹配上了的目标的个数
 
     def get(self):
-        Final_FA = self.dismatch_pixel / self.all_pixel
-        Final_PD = self.PD / self.target
-        return Final_PD, float(Final_FA.cpu().detach().numpy())
+        if self.all_pixel == 0:
+            return 0.0, 0.0
+        final_fa = float(self.dismatch_pixel) / float(self.all_pixel)
+        final_pd = float(self.PD) / float(self.target) if self.target else 0.0
+        return final_pd, final_fa
 
     def reset(self):
         self.FA = np.zeros([self.bins + 1])
@@ -489,7 +526,9 @@ class PD_FA():
 
 
 if __name__ == '__main__':
-    opt.f = open(opt.save_log + 'test_' + (time.ctime()).replace(' ', '_').replace(':', '_') + '.txt', 'w')
+    os.makedirs(opt.save_log, exist_ok=True)
+    opt.metrics_path = os.path.join(opt.save_log, 'test_metrics.jsonl')
+    opt.f = open(os.path.join(opt.save_log, 'test_' + (time.ctime()).replace(' ', '_').replace(':', '_') + '.txt'), 'w')
     if opt.pth_dirs == None:
         for i in range(len(opt.model_names)):
             opt.model_name = opt.model_names[i]
@@ -513,12 +552,12 @@ if __name__ == '__main__':
                     # if dataset_name in pth_dir and model_name in pth_dir:
                     opt.test_dataset_name = dataset_name
                     opt.model_name = model_name
-                    opt.train_dataset_name = pth_dir.split('/')[0]
+                    opt.train_dataset_name = dataset_name
                     print(pth_dir)
                     opt.f.write(pth_dir)
                     print(opt.test_dataset_name)
                     opt.f.write(opt.test_dataset_name + '\n')
-                    opt.pth_dir = opt.save_log + pth_dir
+                    opt.pth_dir = os.path.join(opt.save_log, pth_dir)
                     test()
                     print('\n')
                     opt.f.write('\n')
