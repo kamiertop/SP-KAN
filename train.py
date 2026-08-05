@@ -65,6 +65,8 @@ parser.add_argument("--loss_dice_weight", type=float, default=1.0,
                     help="Dice term weight used by target_aware loss")
 parser.add_argument("--loss_max_pos_weight", type=float, default=20.0,
                     help="Maximum per-batch foreground reweighting")
+parser.add_argument("--kan_grid_size", type=int, default=12,
+                    help="SPKAL grid size; paper setting is 12, repository baseline is 5")
 
 global opt
 opt = parser.parse_args()
@@ -122,7 +124,7 @@ def train() -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = Net(model_name=opt.model_name, mode='train', loss_name=opt.loss_name,
               boundary_weight=opt.loss_boundary_weight, dice_weight=opt.loss_dice_weight,
-              max_pos_weight=opt.loss_max_pos_weight).to(device)
+              max_pos_weight=opt.loss_max_pos_weight, kan_grid_size=opt.kan_grid_size).to(device)
     net.apply(weights_init_kaiming)
     net.train()
     total_loss_list = []
@@ -323,6 +325,7 @@ def run_final_test() -> None:
         '--save_log', os.path.abspath(opt.run_dir),
         '--save_img_dir', os.path.join(os.path.abspath(opt.run_dir), 'results'),
         '--threshold', str(opt.threshold),
+        '--kan_grid_size', str(opt.kan_grid_size),
         '--no-save_img' if not opt.auto_test_save_img else '--save_img',
     ]
     print('Running automatic official test with:', opt.best_checkpoint_path)

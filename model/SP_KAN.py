@@ -255,13 +255,13 @@ class RelativePositionBias(nn.Module):
 
 
 class KANLayer(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.SiLU, drop=0., no_kan=False):
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.SiLU, drop=0., no_kan=False,
+                 grid_size=5):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
         self.dim = in_features
 
-        grid_size = 5
         spline_order = 3
         scale_noise = 0.1
         scale_base = 1.0
@@ -364,7 +364,8 @@ class KANLayer(nn.Module):
 
 
 class PCM(nn.Module):
-    def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.SiLU, norm_layer=nn.LayerNorm, no_kan=False):
+    def __init__(self, dim, drop=0., drop_path=0., act_layer=nn.SiLU, norm_layer=nn.LayerNorm, no_kan=False,
+                 grid_size=5):
         super().__init__()
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -372,7 +373,7 @@ class PCM(nn.Module):
         mlp_hidden_dim = int(dim)
 
         self.layer = KANLayer(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop,
-                              no_kan=no_kan)
+                              no_kan=no_kan, grid_size=grid_size)
 
         self.apply(self._init_weights)
 
@@ -455,6 +456,7 @@ class PatchEmbed(nn.Module):
 class SP_KAN(nn.Module):
     def __init__(self, in_ch=1, out_ch=1, mode='train', deepsuper=True,
                  embed_dims=[256], no_kan=False, drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
+                 kan_grid_size=5,
                  depths=[1, 1, 1], **kwargs):
         super(SP_KAN, self).__init__()
 
@@ -463,6 +465,9 @@ class SP_KAN(nn.Module):
         self.deepsuper = deepsuper
         self.mode = mode
         self.no_kan = no_kan
+        if kan_grid_size < 1:
+            raise ValueError('kan_grid_size must be positive')
+        self.kan_grid_size = int(kan_grid_size)
         print('Deep-Supervision:', deepsuper)
 
         self.maxpool = nn.MaxPool2d(2)
@@ -483,6 +488,7 @@ class SP_KAN(nn.Module):
 
         self.block5 = nn.ModuleList([PCM(dim=embed_dims[0],
                                          drop=drop_rate, drop_path=dpr[0], norm_layer=norm_layer, no_kan=self.no_kan
+                                         , grid_size=self.kan_grid_size
                                          )])
 
         self.patch_embed5 = PatchEmbed(patch_size=3, stride=2, in_chans=embed_dims[0],
@@ -491,6 +497,7 @@ class SP_KAN(nn.Module):
         self.norm5 = norm_layer(embed_dims[0])
         self.dblock5 = nn.ModuleList([PCM(dim=embed_dims[0],
                                           drop=drop_rate, drop_path=dpr[0], norm_layer=norm_layer, no_kan=self.no_kan
+                                          , grid_size=self.kan_grid_size
                                           )])
 
         self.dnorm5 = norm_layer(embed_dims[0])
