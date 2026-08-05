@@ -8,13 +8,17 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 
 class TrainSetLoader_Re_Pad(Dataset):
-    def __init__(self, dataset_dir, dataset_name, patch_size, img_norm_cfg=None):
+    def __init__(self, dataset_dir, dataset_name, patch_size, img_norm_cfg=None,
+                 sample_list=None, augment=True):
         super(TrainSetLoader_Re_Pad).__init__()
         self.dataset_name = dataset_name
         self.dataset_dir = dataset_dir + '/' + dataset_name
         self.patch_size = patch_size
-        with open(self.dataset_dir + '/img_idx/train_' + dataset_name + '.txt', 'r') as f:
-            self.train_list = f.read().splitlines()
+        if sample_list is None:
+            with open(self.dataset_dir + '/img_idx/train_' + dataset_name + '.txt', 'r') as f:
+                sample_list = f.read().splitlines()
+        self.train_list = list(sample_list)
+        self.augment = augment
         if img_norm_cfg == None:
             self.img_norm_cfg = get_img_norm_cfg(dataset_name, dataset_dir)
         else:
@@ -64,7 +68,9 @@ class TrainSetLoader_Re_Pad(Dataset):
     def __getitem__(self, idx):
         if idx not in self._cache:
             self._cache[idx] = self._load_item(idx)
-        image, mask = self.tranform(*self._cache[idx])
+        image, mask = self._cache[idx]
+        if self.augment:
+            image, mask = self.tranform(image, mask)
         image = preprocess(self.patch_size, torch.from_numpy(np.ascontiguousarray(image[None])).float())
         mask = preprocess(self.patch_size, torch.from_numpy(np.ascontiguousarray(mask[None])).float())
         return image, mask
@@ -76,12 +82,15 @@ class TrainSetLoader_Re_Pad(Dataset):
 
 
 class TestSetLoader_Re_Pad(Dataset):
-    def __init__(self, dataset_dir, train_dataset_name, test_dataset_name, patch_size_eva, img_norm_cfg=None):
+    def __init__(self, dataset_dir, train_dataset_name, test_dataset_name, patch_size_eva,
+                 img_norm_cfg=None, sample_list=None):
         super(TestSetLoader_Re_Pad).__init__()
         self.dataset_dir = dataset_dir + '/' + test_dataset_name
         self.patch_size_eva = patch_size_eva
-        with open(self.dataset_dir + '/img_idx/test_' + test_dataset_name + '.txt', 'r') as f:
-            self.test_list = f.read().splitlines()
+        if sample_list is None:
+            with open(self.dataset_dir + '/img_idx/test_' + test_dataset_name + '.txt', 'r') as f:
+                sample_list = f.read().splitlines()
+        self.test_list = list(sample_list)
         if img_norm_cfg == None:
             self.img_norm_cfg = get_img_norm_cfg(train_dataset_name, dataset_dir)
         else:

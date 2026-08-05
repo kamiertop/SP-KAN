@@ -11,6 +11,7 @@ from util.metrics import *
 from util.utils import *
 from torch.utils.tensorboard import SummaryWriter
 from util.train_helpers import Net, postprocess_masks, save_checkpoint, weights_init_kaiming
+from util.data_split import split_train_validation
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 parser = argparse.ArgumentParser(description="PyTorch BasicIRSTD train")
@@ -41,6 +42,8 @@ parser.add_argument("--max_train_steps", type=int, default=None,
                     help="Optional cap on training batches per epoch (useful for smoke tests)")
 parser.add_argument("--threshold", type=float, default=0.5, help="Threshold for test")
 parser.add_argument("--seed", type=int, default=42, help="Threshold for test")
+parser.add_argument("--val_ratio", type=float, default=0.1,
+                    help="Fraction of train_*.txt reserved for validation")
 parser.add_argument("--resume", default=False, help="Resume from an existing checkpoint")
 
 global opt
@@ -56,14 +59,24 @@ def train() -> None:
     # *******************************************************************************************************
     #                                             Train
     # *******************************************************************************************************
-    train_set = TrainSetLoader_Re_Pad(dataset_dir=opt.dataset_dir, dataset_name=opt.dataset_name, patch_size=opt.patchSize,
-                               img_norm_cfg=opt.img_norm_cfg)
+    train_list_path = os.path.join(opt.dataset_dir, opt.dataset_name, 'img_idx',
+                                   'train_' + opt.dataset_name + '.txt')
+    with open(train_list_path, encoding='utf-8') as list_file:
+        train_names, validation_names = split_train_validation(
+            list_file.read().splitlines(), opt.val_ratio, opt.seed)
+    if not train_names or not validation_names:
+        raise ValueError('training validation split requires at least two train samples')
+    train_set = TrainSetLoader_Re_Pad(dataset_dir=opt.dataset_dir, dataset_name=opt.dataset_name,
+                               patch_size=opt.patchSize, img_norm_cfg=opt.img_norm_cfg,
+                               sample_list=train_names, augment=True)
     worker_options = {'persistent_workers': True} if opt.threads else {}
     train_loader = DataLoader(dataset=train_set, num_workers=opt.threads, batch_size=opt.batchSize,
                               shuffle=True, **worker_options)
 
-    test_set = TestSetLoader_Re_Pad(opt.dataset_dir, opt.dataset_name, opt.dataset_name, opt.patchSize_eva,img_norm_cfg=opt.img_norm_cfg)
-    test_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1,
+    validation_set = TestSetLoader_Re_Pad(
+        opt.dataset_dir, opt.dataset_name, opt.dataset_name, opt.patchSize_eva,
+        img_norm_cfg=opt.img_norm_cfg, sample_list=validation_names)
+    validation_loader = DataLoader(dataset=validation_set, num_workers=opt.threads, batch_size=1,
                              shuffle=False, **worker_options)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -136,7 +149,7 @@ def train() -> None:
                 eval_PD_FA = PD_FA()
                 Metric = F1(opt.threshold)
                 # test_loss = []
-                for idx_iter, (img, gt_mask, target_size, org_size, _) in enumerate(test_loader):
+                for idx_iter, (img, gt_mask, target_size, org_size, _) in enumerate(validation_loader):
                     img = Variable(img).to(device)
                     pred = net.forward(img)
                     if isinstance(pred, tuple):
@@ -147,7 +160,6 @@ def train() -> None:
                         pred = pred
 
                     pred = postprocess_masks(pred, target_size, org_size)
-
                     eval_mIoU.update((pred > opt.threshold).cpu(), gt_mask.cpu())
                     eval_PD_FA.update((pred[0, 0, :, :] > opt.threshold).cpu(), gt_mask[0, 0, :, :], org_size)
                     Metric.update(labels=gt_mask.cpu(), preds=pred.cpu())
@@ -236,6 +248,7 @@ if __name__ == '__main__':
                     'batch_size': opt.batchSize,
                     'patch_size': opt.patchSize,
                     'seed': opt.seed,
+                    'val_ratio': opt.val_ratio,
                 }, metrics_file, ensure_ascii=True)
                 metrics_file.write('\n')
             print(opt.dataset_name + '\t' + opt.model_name)
