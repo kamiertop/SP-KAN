@@ -206,6 +206,54 @@ class CViT(nn.Module):
         return out
 
 
+class MiMISTDBlock(nn.Module):
+    """Lightweight local/global state-space block inspired by MiM-ISTD.
+
+    The local path preserves tiny target edges with depthwise convolution while
+    the global path performs a bidirectional selective recurrent scan over the
+    flattened feature map.  It is dependency-free and keeps the NCHW API.
+    """
+    def __init__(self, channels, local_kernel=3):
+        super().__init__()
+        self.norm = LayerNorm3d(channels, LayerNorm_type='WithBias')
+        self.local = nn.Conv2d(channels, channels, local_kernel, padding=local_kernel // 2,
+                               groups=channels, bias=False)
+        self.q = nn.Conv2d(channels, channels, 1)
+        self.v = nn.Conv2d(channels, channels, 1)
+        self.alpha = nn.Parameter(torch.full((1, channels, 1, 1), -1.0))
+        self.proj = nn.Conv2d(channels, channels, 1)
+        self.ffn = nn.Sequential(nn.Conv2d(channels, channels * 2, 1), nn.GELU(),
+                                 nn.Conv2d(channels * 2, channels, 1))
+
+    def _scan(self, x):
+        # recurrent exponential moving average, with data-dependent update gate
+        b, c, h, w = x.shape
+        seq = x.flatten(2).transpose(1, 2)
+        gate = torch.sigmoid(self.q(x).flatten(2).transpose(1, 2))
+        decay = torch.sigmoid(self.alpha).view(1, 1, c)
+        states = []
+        state = torch.zeros_like(seq[:, 0])
+        for t in range(seq.shape[1]):
+            state = decay * state + (1.0 - decay) * gate[:, t] * seq[:, t]
+            states.append(state)
+        forward = torch.stack(states, dim=1)
+        backward_states = []
+        state = torch.zeros_like(seq[:, 0])
+        for t in range(seq.shape[1] - 1, -1, -1):
+            state = decay * state + (1.0 - decay) * gate[:, t] * seq[:, t]
+            backward_states.append(state)
+        backward = torch.stack(backward_states[::-1], dim=1)
+        return ((forward + backward) * 0.5).transpose(1, 2).reshape(b, c, h, w)
+
+    def forward(self, x):
+        y = self.norm(x)
+        local = self.local(y)
+        global_ctx = self._scan(self.v(y))
+        gate = torch.sigmoid(self.q(y))
+        fused = self.proj(local + gate * global_ctx)
+        return x + fused + self.ffn(self.norm(x + fused))
+
+
 class RelativePositionBias(nn.Module):
     def __init__(self, num_heads, h, w):
         super().__init__()
@@ -452,10 +500,32 @@ class PatchEmbed(nn.Module):
         return x, H, W
 
 
+class CrossViewBackgroundFusion(nn.Module):
+    """Align channel statistics and inject Top-K low-response background context."""
+    def __init__(self, channels, topk=0.2):
+        super().__init__()
+        self.topk = float(topk)
+        self.align = nn.Conv2d(channels, channels, 1, bias=False)
+        self.gate = nn.Sequential(nn.Conv2d(channels * 2, channels, 1), nn.Sigmoid())
+        self.norm = nn.BatchNorm2d(channels)
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+        scores = x.detach().abs().mean(1).flatten(1)
+        k = max(1, min(scores.shape[1], int(scores.shape[1] * self.topk)))
+        idx = scores.topk(k, dim=1, largest=False).indices
+        flat = x.flatten(2)
+        bg = flat.gather(2, idx.unsqueeze(1).expand(-1, c, -1)).mean(-1).view(b, c, 1, 1)
+        bg = self.align(bg).expand(-1, -1, h, w)
+        gate = self.gate(torch.cat([x, bg], dim=1))
+        return self.norm(x + gate * bg)
+
+
 class SP_KAN(nn.Module):
     def __init__(self, in_ch=1, out_ch=1, mode='train', deepsuper=True,
                  embed_dims=[256], no_kan=False, drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
-                 depths=[1, 1, 1], **kwargs):
+                 depths=[1, 1, 1], cross_view_branch=False, cross_view_topk=0.2,
+                 mamba_branch=False, **kwargs):
         super(SP_KAN, self).__init__()
 
         basic_width = 16
@@ -463,6 +533,8 @@ class SP_KAN(nn.Module):
         self.deepsuper = deepsuper
         self.mode = mode
         self.no_kan = no_kan
+        self.cross_view_branch = cross_view_branch
+        self.mamba_branch = mamba_branch
         print('Deep-Supervision:', deepsuper)
 
         self.maxpool = nn.MaxPool2d(2)
@@ -474,12 +546,14 @@ class SP_KAN(nn.Module):
         self.TransH3 = CViT(filters[2], 1)
         self.TransH4 = CViT(filters[3], 1)
         self.TransH5 = CViT(filters[4], 1)
+        self.mim_mamba5 = MiMISTDBlock(filters[4]) if mamba_branch else nn.Identity()
 
         self.stem = conv_block(in_ch, filters[0])
         self.Conv2 = conv_block(filters[0], filters[1])
         self.Conv3 = conv_block(filters[1], filters[2])
         self.Conv4 = conv_block(filters[2], filters[3])
         self.Conv5 = conv_block(filters[3], filters[4])
+        self.cross_view_fusion = CrossViewBackgroundFusion(filters[3], cross_view_topk)
 
         self.block5 = nn.ModuleList([PCM(dim=embed_dims[0],
                                          drop=drop_rate, drop_path=dpr[0], norm_layer=norm_layer, no_kan=self.no_kan
@@ -532,9 +606,12 @@ class SP_KAN(nn.Module):
 
         e4 = self.Conv4(self.maxpool(e3))  # 1 128 32 32
         e4 = self.TransH4(e4)
+        if self.cross_view_branch:
+            e4 = self.cross_view_fusion(e4)
 
         e5 = self.Conv5(self.maxpool(e4))  # 1 256 16 16
         e5 = self.TransH5(e5)  # 1 256 16 16
+        e5 = self.mim_mamba5(e5)
 
         # *****************************************************
         #                          KAN

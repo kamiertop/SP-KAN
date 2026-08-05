@@ -40,6 +40,9 @@ parser.add_argument("--save_log", type=str, default=r'./log/', help="path of sav
 parser.add_argument("--threshold", type=float, default=0.5)
 parser.add_argument("--max_test_steps", type=int, default=None,
                     help="Optional cap on evaluated batches (useful for smoke tests)")
+parser.add_argument("--cross_view", action=argparse.BooleanOptionalAction, default=False)
+parser.add_argument("--cross_view_topk", type=float, default=0.2)
+parser.add_argument("--mamba_branch", action=argparse.BooleanOptionalAction, default=False)
 
 opt = None
 
@@ -60,7 +63,9 @@ def test() -> None:
     metric_f1 = F1(opt.threshold)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    net = SP_KAN(1, 1, mode='test', deepsuper=True).to(device)
+    net = SP_KAN(1, 1, mode='test', deepsuper=True,
+                 cross_view_branch=opt.cross_view, cross_view_topk=opt.cross_view_topk,
+                 mamba_branch=opt.mamba_branch).to(device)
     if not os.path.isfile(opt.pth_dir):
         raise FileNotFoundError(
             f'Checkpoint not found: {opt.pth_dir}. Set --pth_dirs to a checkpoint relative to --save_log.'

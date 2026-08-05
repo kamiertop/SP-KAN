@@ -11,7 +11,8 @@ from util.losses import TargetAwareBoundaryLoss, deep_supervision_loss
 
 class Net(nn.Module):
     def __init__(self, model_name, mode, loss_name='target_aware', boundary_weight=2.0,
-                 dice_weight=1.0, max_pos_weight=20.0):
+                 dice_weight=1.0, max_pos_weight=20.0, cross_view=False,
+                 cross_view_noise_std=0.03, cross_view_topk=0.2, mamba_branch=False):
         super().__init__()
         self.model_name = model_name
         if loss_name == 'bce':
@@ -27,16 +28,31 @@ class Net(nn.Module):
         self.loss_name = loss_name
         if model_name != 'SP_KAN':
             raise ValueError(f'Unsupported model: {model_name}')
-        self.model = SP_KAN(1, 1, mode=mode, deepsuper=True)
+        self.cross_view = cross_view
+        self.cross_view_noise_std = cross_view_noise_std
+        self.mamba_branch = mamba_branch
+        self.model = SP_KAN(1, 1, mode=mode, deepsuper=True,
+                            cross_view_branch=cross_view, cross_view_topk=cross_view_topk,
+                            mamba_branch=mamba_branch)
+        self._consistency = None
         print('input channels: 1')
         print('---------------------------------------------------------------')
 
     def forward(self, img):
-        return self.model(img)
+        clean = self.model(img)
+        self._consistency = None
+        if self.cross_view and self.training:
+            noisy_img = (img + torch.randn_like(img) * self.cross_view_noise_std).clamp(0, 1)
+            noisy = self.model(noisy_img)
+            cp = clean[-1] if isinstance(clean, (list, tuple)) else clean
+            np = noisy[-1] if isinstance(noisy, (list, tuple)) else noisy
+            self._consistency = (cp - np).pow(2).mean()
+        return clean
 
     def loss(self, preds, gt_masks):
         if isinstance(self.cal_loss, TargetAwareBoundaryLoss):
-            return deep_supervision_loss(self.cal_loss, preds, gt_masks)
+            loss = deep_supervision_loss(self.cal_loss, preds, gt_masks)
+            return loss + (0.1 * self._consistency if self._consistency is not None else 0.0)
         if isinstance(preds, list):
             return sum(self.cal_loss(pred, gt_masks[i]) for i, pred in enumerate(preds)) / len(preds)
         if isinstance(preds, tuple):
