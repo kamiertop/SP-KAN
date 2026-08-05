@@ -31,6 +31,8 @@ class DataSplitTests(unittest.TestCase):
         self.assertEqual(len(optimizer_steps), 1)
         self.assertIn("for img, gt_mask in train_loader", source)
         self.assertIn("for idx_iter, (img, gt_mask, target_size, org_size, _) in enumerate(validation_loader)", source)
+        self.assertIn("--begin_validation", source)
+        self.assertIn("--every_validation", source)
 
     def test_test_loader_reads_official_test_list(self):
         dataset = pathlib.Path(__file__).parents[1] / "datasets" / "SIRST3"

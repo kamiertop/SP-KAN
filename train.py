@@ -21,13 +21,11 @@ parser.add_argument("--dataset_names", default=['SIRST3'],
 parser.add_argument("--optimizer_name", default='Adam', type=str, help="optimizer name: AdamW, Adam, Adagrad, SGD")
 parser.add_argument("--epochs", default=1000, type=int, help="numbers of epoch")
 
-parser.add_argument("--begin_test", default=100, type=int)
-parser.add_argument("--every_test", default=2, type=int)
+parser.add_argument("--begin_validation", "--begin_test", dest="begin_validation", default=1, type=int,
+                    help="Epoch at which validation starts (legacy alias: --begin_test)")
+parser.add_argument("--every_validation", "--every_test", dest="every_validation", default=1, type=int,
+                    help="Validate every N epochs (legacy alias: --every_test)")
 parser.add_argument("--every_print", default=10, type=int)
-
-# parser.add_argument("--begin_test", default=1, type=int)
-# parser.add_argument("--every_test", default=1, type=int)
-# parser.add_argument("--every_print", default=1, type=int)
 
 parser.add_argument("--dataset_dir", default=r'./datasets')
 parser.add_argument("--batchSize", type=int, default=8, help="Training batch sizse")
@@ -50,9 +48,9 @@ global opt
 opt = parser.parse_args()
 seed_pytorch(opt.seed)
 print("---------------------------------------------------------------")
-print('batchSize: {0} -- begin_test: {1} -- every_print: {2} -- every_test: {3}'.format(opt.batchSize, opt.begin_test,
+print('batchSize: {0} -- begin_validation: {1} -- every_print: {2} -- every_validation: {3}'.format(opt.batchSize, opt.begin_validation,
                                                                                         opt.every_print,
-                                                                                        opt.every_test))
+                                                                                        opt.every_validation))
 
 
 def train() -> None:
@@ -138,10 +136,10 @@ def train() -> None:
             best_mIOU = results1
             best_Pd_Fa = results2
 
-        if (idx_epoch + 1) >= opt.begin_test and (
-                idx_epoch + 1) % opt.every_test == 0:  # tensorboard: write test evaluate
+        if (idx_epoch + 1) >= opt.begin_validation and (
+                idx_epoch + 1) % opt.every_validation == 0:  # TensorBoard: validation metrics
             # *******************************************************************************************************
-            #                                             Test
+            #                                          Validation
             # *******************************************************************************************************
             net.eval()
             with torch.no_grad():
@@ -213,7 +211,8 @@ def train() -> None:
                     'total_loss': total_loss_list,
                 }, save_pth)
 
-        evaluated = (idx_epoch + 1) >= opt.begin_test and (idx_epoch + 1) % opt.every_test == 0
+        evaluated = (idx_epoch + 1) >= opt.begin_validation and (
+            idx_epoch + 1) % opt.every_validation == 0
         record = {
             'run_id': f'{opt.dataset_name}_{opt.model_name}',
             'epoch': idx_epoch + 1,
