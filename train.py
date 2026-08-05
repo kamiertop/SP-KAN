@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+import sys
 import time
 from datetime import datetime
 
@@ -51,6 +53,10 @@ parser.add_argument("--early_stopping_min_delta", type=float, default=1e-5,
                     help="Minimum validation mIoU improvement counted by early stopping")
 parser.add_argument("--min_epochs", type=int, default=1,
                     help="Do not early-stop before this many epochs")
+parser.add_argument("--auto_test", action=argparse.BooleanOptionalAction, default=True,
+                    help="Run official test.py automatically after training")
+parser.add_argument("--auto_test_save_img", action=argparse.BooleanOptionalAction, default=False,
+                    help="Save prediction images during automatic final test")
 parser.add_argument("--resume", default=False, help="Resume from an existing checkpoint")
 
 global opt
@@ -137,6 +143,7 @@ def train() -> None:
     best_Pd_Fa = [0, 1]
     best_validation_miou = -float('inf')
     validation_checks_without_improvement = 0
+    opt.best_checkpoint_path = None
 
     for idx_epoch in range(0, opt.nEpochs):
         epoch_started = time.time()
@@ -247,6 +254,7 @@ def train() -> None:
                     'state_dict': net.state_dict(),
                     'total_loss': total_loss_list,
                 }, save_pth)
+                opt.best_checkpoint_path = save_pth
 
             elif results2[0] > 0.978 and results2[1] < 1e-5:
                 # best_Pd = results2
@@ -266,6 +274,7 @@ def train() -> None:
                     'state_dict': net.state_dict(),
                     'total_loss': total_loss_list,
                 }, save_pth)
+                opt.best_checkpoint_path = save_pth
 
         evaluated = (idx_epoch + 1) >= opt.begin_validation and (
             idx_epoch + 1) % opt.every_validation == 0
@@ -290,6 +299,27 @@ def train() -> None:
                   % (idx_epoch + 1, validation_checks_without_improvement))
             break
     writer.close()
+
+
+def run_final_test() -> None:
+    """Evaluate the selected checkpoint on the official test list."""
+    if not opt.best_checkpoint_path or not os.path.isfile(opt.best_checkpoint_path):
+        print('No validation checkpoint was saved; skipping automatic final test.')
+        return
+    test_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test.py')
+    command = [
+        sys.executable, test_script,
+        '--model_names', opt.model_name,
+        '--dataset_names', opt.dataset_name,
+        '--dataset_dir', os.path.abspath(opt.dataset_dir),
+        '--pth_dirs', os.path.abspath(opt.best_checkpoint_path),
+        '--save_log', os.path.abspath(opt.run_dir),
+        '--save_img_dir', os.path.join(os.path.abspath(opt.run_dir), 'results'),
+        '--threshold', str(opt.threshold),
+        '--no-save_img' if not opt.auto_test_save_img else '--save_img',
+    ]
+    print('Running automatic official test with:', opt.best_checkpoint_path)
+    subprocess.run(command, check=True)
 
 if __name__ == '__main__':
     save_root = opt.save
@@ -329,5 +359,7 @@ if __name__ == '__main__':
                 metrics_file.write('\n')
             print(opt.dataset_name + '\t' + opt.model_name)
             train()
+            if opt.auto_test:
+                run_final_test()
             print('\n')
             opt.f.close()

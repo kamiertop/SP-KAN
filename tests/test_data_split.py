@@ -40,6 +40,9 @@ class DataSplitTests(unittest.TestCase):
         self.assertIn("datetime.now().strftime", source)
         self.assertIn("default=r'./runs'", source)
         self.assertIn("os.path.join(opt.run_dir, 'tensorboard')", source)
+        self.assertIn("def run_final_test()", source)
+        self.assertIn("test.py", source)
+        self.assertIn("--no-save_img", source)
 
     def test_test_loader_reads_official_test_list(self):
         dataset = pathlib.Path(__file__).parents[1] / "datasets" / "SIRST3"
