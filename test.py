@@ -17,6 +17,7 @@ from collections import OrderedDict
 from model.SP_KAN import SP_KAN as SP_KAN
 import numpy as np
 import torch
+import torch.nn.functional as F
 from skimage import measure
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
@@ -79,8 +80,7 @@ def test() -> None:
             pred = net(img.to(device))
             # pred = pred[:, :, :size[0], :size[1]]
 
-            if pred.shape[-2:] != gt_mask.shape[-2:]:
-                pred = postprocess_masks(pred, target_size, org_size)
+            pred = align_prediction_to_target(pred, gt_mask, target_size, org_size)
 
             gt_mask = gt_mask.to(device)
 
@@ -154,6 +154,20 @@ def postprocess_masks(
     preds = F.interpolate(preds, (original_h, original_w), mode="bicubic", align_corners=False)
 
     return preds
+
+
+def align_prediction_to_target(
+    pred: torch.Tensor,
+    gt_mask: torch.Tensor,
+    input_size: Sequence[int | torch.Tensor],
+    original_size: Sequence[int | torch.Tensor],
+) -> torch.Tensor:
+    """Postprocess and, if necessary, force prediction to GT spatial size."""
+    if pred.shape[-2:] != gt_mask.shape[-2:]:
+        pred = postprocess_masks(pred, input_size, original_size)
+    if pred.shape[-2:] != gt_mask.shape[-2:]:
+        pred = F.interpolate(pred, size=gt_mask.shape[-2:], mode='bilinear', align_corners=False)
+    return pred
 
 
 def cal_tp_pos_fp_neg(

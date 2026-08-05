@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from test import SamplewiseSigmoidMetric, evaluation_jobs
+from test import SamplewiseSigmoidMetric, align_prediction_to_target, evaluation_jobs
 from util.metrics import F1
 
 
@@ -30,6 +30,12 @@ class MetricTests(unittest.TestCase):
             list(evaluation_jobs(['a', 'b'], ['x', 'y', 'z'], ['only.pth']))
         with self.assertRaises(ValueError):
             list(evaluation_jobs(['OtherModel'], ['SIRST3'], ['only.pth']))
+
+    def test_prediction_is_aligned_to_ground_truth_shape(self):
+        pred = torch.rand(1, 1, 8, 8)
+        target = torch.zeros(1, 1, 7, 9)
+        aligned = align_prediction_to_target(pred, target, (8, 8), (7, 9))
+        self.assertEqual(aligned.shape, target.shape)
 
 
 if __name__ == '__main__':
