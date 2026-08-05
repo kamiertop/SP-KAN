@@ -15,6 +15,7 @@ from util.utils import *
 from torch.utils.tensorboard import SummaryWriter
 from util.train_helpers import Net, postprocess_masks, save_checkpoint, weights_init_kaiming
 from util.data_split import split_train_validation
+from util.noise import add_infrared_noise, prediction_consistency_loss
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 parser = argparse.ArgumentParser(description="PyTorch BasicIRSTD train")
@@ -65,6 +66,14 @@ parser.add_argument("--loss_dice_weight", type=float, default=1.0,
                     help="Dice term weight used by target_aware loss")
 parser.add_argument("--loss_max_pos_weight", type=float, default=20.0,
                     help="Maximum per-batch foreground reweighting")
+parser.add_argument("--restoration_branch", action=argparse.BooleanOptionalAction, default=True,
+                    help="Use the gated restoration stem")
+parser.add_argument("--noise_consistency_weight", type=float, default=0.5,
+                    help="Clean/noisy prediction consistency weight; 0 disables")
+parser.add_argument("--noise_warmup_epochs", type=int, default=5)
+parser.add_argument("--noise_gaussian_std", type=float, default=0.04)
+parser.add_argument("--noise_stripe_prob", type=float, default=0.25)
+parser.add_argument("--noise_dead_pixel_prob", type=float, default=0.01)
 
 global opt
 opt = parser.parse_args()
@@ -122,7 +131,8 @@ def train() -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = Net(model_name=opt.model_name, mode='train', loss_name=opt.loss_name,
               boundary_weight=opt.loss_boundary_weight, dice_weight=opt.loss_dice_weight,
-              max_pos_weight=opt.loss_max_pos_weight).to(device)
+              max_pos_weight=opt.loss_max_pos_weight,
+              restoration_branch=opt.restoration_branch).to(device)
     net.apply(weights_init_kaiming)
     net.train()
     total_loss_list = []
@@ -165,6 +175,16 @@ def train() -> None:
             img, gt_mask = Variable(img).to(device), Variable(gt_mask).to(device)
             pred = net.forward(img)
             loss = net.loss(pred, gt_mask)
+            if opt.noise_consistency_weight > 0 and idx_epoch + 1 > opt.noise_warmup_epochs:
+                noisy_img = add_infrared_noise(
+                    img,
+                    gaussian_std=opt.noise_gaussian_std,
+                    stripe_prob=opt.noise_stripe_prob,
+                    dead_pixel_prob=opt.noise_dead_pixel_prob,
+                )
+                noisy_pred = net.forward(noisy_img)
+                loss = (loss + net.loss(noisy_pred, gt_mask)
+                        + opt.noise_consistency_weight * prediction_consistency_loss(pred, noisy_pred))
             epoch_loss_values.append(float(loss.detach().cpu()))
             optimizer.zero_grad()
             loss.backward()
@@ -323,6 +343,7 @@ def run_final_test() -> None:
         '--save_log', os.path.abspath(opt.run_dir),
         '--save_img_dir', os.path.join(os.path.abspath(opt.run_dir), 'results'),
         '--threshold', str(opt.threshold),
+        '--restoration_branch' if opt.restoration_branch else '--no-restoration_branch',
         '--no-save_img' if not opt.auto_test_save_img else '--save_img',
     ]
     print('Running automatic official test with:', opt.best_checkpoint_path)

@@ -176,6 +176,27 @@ class LayerNorm3d(nn.Module):
         return to_4d(self.body(to_3d(x)), h, w)
 
 
+class RestorationResidualBlock(nn.Module):
+    """Lightweight Restormer-inspired gated restoration block."""
+
+    def __init__(self, dim, expansion=2):
+        super().__init__()
+        self.norm1 = LayerNorm3d(dim, LayerNorm_type='WithBias')
+        self.qkv = nn.Conv2d(dim, dim * 3, 1, bias=False)
+        self.qkv_dw = nn.Conv2d(dim * 3, dim * 3, 3, padding=1, groups=dim * 3, bias=False)
+        self.project = nn.Conv2d(dim, dim, 1, bias=False)
+        self.norm2 = LayerNorm3d(dim, LayerNorm_type='WithBias')
+        hidden = dim * expansion
+        self.ffn_expand = nn.Conv2d(dim, hidden * 2, 1, bias=False)
+        self.ffn_project = nn.Conv2d(hidden, dim, 1, bias=False)
+
+    def forward(self, x):
+        q, k, v = self.qkv_dw(self.qkv(self.norm1(x))).chunk(3, dim=1)
+        x = x + self.project(v * torch.sigmoid(q + k))
+        a, b = self.ffn_expand(self.norm2(x)).chunk(2, dim=1)
+        return x + self.ffn_project(a * F.gelu(b))
+
+
 class CViT(nn.Module):
 
     def __init__(self, in_ch, heads, attn_drop=0., proj_drop=0., reduce_size=16, projection='interp',
@@ -455,6 +476,7 @@ class PatchEmbed(nn.Module):
 class SP_KAN(nn.Module):
     def __init__(self, in_ch=1, out_ch=1, mode='train', deepsuper=True,
                  embed_dims=[256], no_kan=False, drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
+                 restoration_branch=True,
                  depths=[1, 1, 1], **kwargs):
         super(SP_KAN, self).__init__()
 
@@ -463,6 +485,7 @@ class SP_KAN(nn.Module):
         self.deepsuper = deepsuper
         self.mode = mode
         self.no_kan = no_kan
+        self.restoration_branch = restoration_branch
         print('Deep-Supervision:', deepsuper)
 
         self.maxpool = nn.MaxPool2d(2)
@@ -476,6 +499,7 @@ class SP_KAN(nn.Module):
         self.TransH5 = CViT(filters[4], 1)
 
         self.stem = conv_block(in_ch, filters[0])
+        self.restoration = RestorationResidualBlock(filters[0]) if restoration_branch else nn.Identity()
         self.Conv2 = conv_block(filters[0], filters[1])
         self.Conv3 = conv_block(filters[1], filters[2])
         self.Conv4 = conv_block(filters[2], filters[3])
@@ -521,7 +545,7 @@ class SP_KAN(nn.Module):
         # x=torch.cat([x,x,x],dim=1)
         B = x.shape[0]
 
-        e1 = self.stem(x)  # 1 16 256 256
+        e1 = self.restoration(self.stem(x))  # 1 16 256 256
         e1 = self.TransH1(e1)  # 1 16 256 256
 
         e2 = self.Conv2(self.maxpool(e1))  # 1 32 128 128
