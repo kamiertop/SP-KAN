@@ -4,6 +4,7 @@ import argparse
 import json
 import time
 
+import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from util.dataset_resize import *
@@ -149,9 +150,10 @@ def train() -> None:
                 eval_mIoU = mIoU()
                 eval_PD_FA = PD_FA()
                 Metric = F1(opt.threshold)
-                # test_loss = []
+                validation_loss_values = []
                 for idx_iter, (img, gt_mask, target_size, org_size, _) in enumerate(validation_loader):
                     img = Variable(img).to(device)
+                    gt_mask = gt_mask.to(device)
                     pred = net.forward(img)
                     if isinstance(pred, tuple):
                         pred = pred[-1]
@@ -161,17 +163,25 @@ def train() -> None:
                         pred = pred
 
                     pred = postprocess_masks(pred, target_size, org_size)
+                    validation_loss_values.append(float(F.binary_cross_entropy(
+                        pred.clamp(1e-7, 1.0 - 1e-7), gt_mask
+                    ).detach().cpu()))
                     eval_mIoU.update((pred > opt.threshold).cpu(), gt_mask.cpu())
-                    eval_PD_FA.update((pred[0, 0, :, :] > opt.threshold).cpu(), gt_mask[0, 0, :, :], org_size)
+                    eval_PD_FA.update((pred[0, 0, :, :] > opt.threshold).cpu(),
+                                      gt_mask[0, 0, :, :].cpu(), org_size)
                     Metric.update(labels=gt_mask.cpu(), preds=pred.cpu())
 
                 results1 = eval_mIoU.get()
                 results2 = eval_PD_FA.get()
                 f1_score = Metric.get()
+                val_loss = float(np.mean(validation_loss_values))
+                writer.add_scalar('val_loss', val_loss, idx_epoch + 1)
                 writer.add_scalar('mIOU', results1[-1], idx_epoch + 1)
                 writer.add_scalar('F1', f1_score, idx_epoch + 1)
                 writer.add_scalar('Pd', results2[0], idx_epoch + 1)
                 writer.add_scalar('Fa', results2[1], idx_epoch + 1)
+                print('Validation---Epoch---%d, val_loss---%f, mIoU---%f, F1---%f'
+                      % (idx_epoch + 1, val_loss, results1[1], f1_score))
 
             # IOU
             if results1[1] > best_mIOU[1]:
@@ -221,6 +231,7 @@ def train() -> None:
             'epoch': idx_epoch + 1,
             'lr': float(scheduler.get_last_lr()[0]),
             'train_loss': epoch_loss,
+            'val_loss': float(val_loss) if evaluated else None,
             'miou': float(results1[1]) if evaluated else None,
             'pd': float(results2[0]) if evaluated else None,
             'fa': float(results2[1]) if evaluated else None,
