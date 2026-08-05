@@ -34,9 +34,9 @@ parser.add_argument("--batchSize", type=int, default=8, help="Training batch siz
 # ******************* Others   *******************
 parser.add_argument("--patchSize", type=int, default=512, help="Training patch size")
 parser.add_argument("--patchSize_eva", type=int, default=512, help="Evaluation patch size")
-parser.add_argument("--save", default=r'./log', type=str, help="Root directory for timestamped run artifacts")
-parser.add_argument("--log_dir", type=str, default="./otherlogs/SP_KAN",
-                    help='Root directory for timestamped TensorBoard logs')
+parser.add_argument("--save", default=r'./runs', type=str, help="Root directory for timestamped run artifacts")
+parser.add_argument("--log_dir", type=str, default=None,
+                    help='Optional separate TensorBoard root (default: <run_dir>/tensorboard)')
 parser.add_argument("--img_norm_cfg", default=None)
 parser.add_argument("--threads", type=int, default=0, help="Number of threads for data loader to use")
 parser.add_argument("--max_train_steps", type=int, default=None,
@@ -306,7 +306,8 @@ if __name__ == '__main__':
             opt.run_id = f'{opt.dataset_name}_{opt.model_name}_{run_timestamp}'
             opt.run_dir = os.path.join(save_root, opt.run_id)
             opt.checkpoint_dir = os.path.join(opt.run_dir, 'checkpoints')
-            opt.log_dir = os.path.join(tensorboard_root, opt.run_id)
+            opt.log_dir = (os.path.join(opt.run_dir, 'tensorboard') if tensorboard_root is None
+                           else os.path.join(tensorboard_root, opt.run_id))
             os.makedirs(opt.checkpoint_dir, exist_ok=True)
             os.makedirs(opt.log_dir, exist_ok=True)
             opt.params_path = os.path.join(opt.run_dir, 'train_config.json')

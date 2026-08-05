@@ -38,6 +38,8 @@ class DataSplitTests(unittest.TestCase):
         self.assertIn("validation_checks_without_improvement", source)
         self.assertIn("train_config.json", source)
         self.assertIn("datetime.now().strftime", source)
+        self.assertIn("default=r'./runs'", source)
+        self.assertIn("os.path.join(opt.run_dir, 'tensorboard')", source)
 
     def test_test_loader_reads_official_test_list(self):
         dataset = pathlib.Path(__file__).parents[1] / "datasets" / "SIRST3"
