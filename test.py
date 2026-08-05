@@ -28,6 +28,8 @@ parser.add_argument("--pth_dirs", default=['SIRST3/SP-KAN-best.pth.tar'], nargs=
 parser.add_argument("--dataset_dir", default=r'./datasets', type=str, help="train_dataset_dir")
 parser.add_argument("--dataset_names", default=['SIRST3'], nargs='+',
                     help="dataset_name: 'SIRST3','NUAA-SIRST', 'NUDT-SIRST', 'IRSTD-1K'")
+parser.add_argument("--eval_split", choices=['test', 'train'], default='test',
+                    help="List split to evaluate (default: official test split)")
 parser.add_argument("--patchSize_eva", type=int, default=512, help="Evaluation patch size")
 parser.add_argument("--threads", type=int, default=0, help="Number of data loader workers")
 parser.add_argument("--img_norm_cfg", default=None,
@@ -45,8 +47,12 @@ opt = None
 
 
 def test() -> None:
-    test_set = TestSetLoader_Re_Pad(opt.dataset_dir, opt.train_dataset_name, opt.test_dataset_name, opt.patchSize_eva,
-                                    opt.img_norm_cfg)
+    list_path = os.path.join(opt.dataset_dir, opt.test_dataset_name, 'img_idx',
+                             f'{opt.eval_split}_{opt.test_dataset_name}.txt')
+    with open(list_path, encoding='utf-8') as list_file:
+        eval_list = list_file.read().splitlines()
+    test_set = TestSetLoader_Re_Pad(opt.dataset_dir, opt.train_dataset_name, opt.test_dataset_name,
+                                    opt.patchSize_eva, opt.img_norm_cfg, sample_list=eval_list)
     worker_options = {'persistent_workers': True} if opt.threads else {}
     test_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False,
                              **worker_options)
@@ -130,6 +136,7 @@ def test() -> None:
             metrics_file.write(json.dumps({
                 'run_id': f'{opt.test_dataset_name}_{opt.model_name}',
                 'dataset': opt.test_dataset_name,
+                'eval_split': opt.eval_split,
                 'model': opt.model_name,
                 'checkpoint': opt.pth_dir,
                 'threshold': opt.threshold,

@@ -37,6 +37,12 @@ class MetricTests(unittest.TestCase):
         aligned = align_prediction_to_target(pred, target, (8, 8), (7, 9))
         self.assertEqual(aligned.shape, target.shape)
 
+    def test_test_script_supports_explicit_train_split(self):
+        from pathlib import Path
+        source = Path(__file__).parents[1].joinpath("test.py").read_text()
+        self.assertIn("--eval_split", source)
+        self.assertIn("f'{opt.eval_split}_{opt.test_dataset_name}.txt'", source)
+
 
 if __name__ == '__main__':
     unittest.main()
