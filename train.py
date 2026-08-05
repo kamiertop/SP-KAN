@@ -122,6 +122,9 @@ def train() -> None:
 
         epoch_loss = float(np.mean(epoch_loss_values))
         total_loss_list.append(epoch_loss)
+        epoch_seconds = time.time() - epoch_started
+        print(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f, epoch_seconds---%.3f'
+              % (idx_epoch + 1, epoch_loss, epoch_seconds))
 
         if (idx_epoch + 1) % opt.every_print == 0:  # tensorboard : write train loss
             print(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f, lr---%f,'
@@ -222,7 +225,7 @@ def train() -> None:
             'pd': float(results2[0]) if evaluated else None,
             'fa': float(results2[1]) if evaluated else None,
             'f1': float(f1_score) if evaluated else None,
-            'epoch_seconds': round(time.time() - epoch_started, 3),
+            'epoch_seconds': round(epoch_seconds, 3),
         }
         with open(opt.metrics_path, 'a') as metrics_file:
             metrics_file.write(json.dumps(record, ensure_ascii=True) + '\n')
