@@ -14,6 +14,30 @@ import torch
 import torch.nn.functional as F
 
 
+class AdaptiveThresholdFocalResidual(torch.nn.Module):
+    """Focal residual whose hard-example threshold follows target sparsity."""
+
+    def __init__(self, gamma=2.0, threshold_scale=0.2, temperature=0.1):
+        super().__init__()
+        if gamma < 0 or threshold_scale < 0 or temperature <= 0:
+            raise ValueError('invalid adaptive focal hyperparameters')
+        self.gamma = float(gamma)
+        self.threshold_scale = float(threshold_scale)
+        self.temperature = float(temperature)
+
+    def forward(self, prediction, target):
+        target = target.float().clamp(0.0, 1.0)
+        if prediction.shape != target.shape:
+            target = F.interpolate(target, size=prediction.shape[-2:], mode='nearest')
+        prediction = prediction.float().clamp(1e-6, 1.0 - 1e-6)
+        positive_ratio = target.mean().detach()
+        threshold = (0.5 + self.threshold_scale * (0.1 - positive_ratio)).clamp(0.5, 0.9)
+        pt = prediction * target + (1.0 - prediction) * (1.0 - target)
+        hard_weight = torch.sigmoid((threshold - pt) / self.temperature)
+        focal_weight = (1.0 - pt).pow(self.gamma) * (0.5 + hard_weight)
+        return (focal_weight * F.binary_cross_entropy(prediction, target, reduction='none')).mean()
+
+
 class TargetAwareBoundaryLoss(torch.nn.Module):
     """Foreground-ratio adaptive BCE + boundary Dice loss.
 
@@ -29,16 +53,25 @@ class TargetAwareBoundaryLoss(torch.nn.Module):
         dice_weight: float = 1.0,
         max_pos_weight: float = 20.0,
         smooth: float = 1.0,
+        focal_weight: float = 0.5,
+        focal_gamma: float = 2.0,
+        focal_threshold_scale: float = 0.2,
+        focal_temperature: float = 0.1,
     ) -> None:
         super().__init__()
-        if boundary_weight < 0 or dice_weight < 0:
-            raise ValueError("boundary_weight and dice_weight must be non-negative")
+        if boundary_weight < 0 or dice_weight < 0 or focal_weight < 0:
+            raise ValueError("loss weights must be non-negative")
         if max_pos_weight < 1:
             raise ValueError("max_pos_weight must be at least 1")
         self.boundary_weight = float(boundary_weight)
         self.dice_weight = float(dice_weight)
         self.max_pos_weight = float(max_pos_weight)
         self.smooth = float(smooth)
+        self.focal_weight = float(focal_weight)
+        self.adaptive_focal = AdaptiveThresholdFocalResidual(
+            gamma=focal_gamma, threshold_scale=focal_threshold_scale,
+            temperature=focal_temperature,
+        )
 
     @staticmethod
     def _boundary_map(target: torch.Tensor) -> torch.Tensor:
@@ -69,7 +102,8 @@ class TargetAwareBoundaryLoss(torch.nn.Module):
         dice = 1.0 - (2.0 * intersection + self.smooth) / (
             prediction.sum() + target.sum() + self.smooth
         )
-        return bce + self.dice_weight * dice
+        focal = self.adaptive_focal(prediction, target) if self.focal_weight else prediction.new_zeros(())
+        return bce + self.dice_weight * dice + self.focal_weight * focal
 
 
 def deep_supervision_loss(

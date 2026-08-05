@@ -65,6 +65,11 @@ parser.add_argument("--loss_dice_weight", type=float, default=1.0,
                     help="Dice term weight used by target_aware loss")
 parser.add_argument("--loss_max_pos_weight", type=float, default=20.0,
                     help="Maximum per-batch foreground reweighting")
+parser.add_argument("--loss_focal_weight", type=float, default=0.5,
+                    help="Adaptive focal residual weight; set 0 for TABDS-only")
+parser.add_argument("--loss_focal_gamma", type=float, default=2.0)
+parser.add_argument("--loss_focal_threshold_scale", type=float, default=0.2)
+parser.add_argument("--loss_focal_temperature", type=float, default=0.1)
 
 global opt
 opt = parser.parse_args()
@@ -122,7 +127,10 @@ def train() -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = Net(model_name=opt.model_name, mode='train', loss_name=opt.loss_name,
               boundary_weight=opt.loss_boundary_weight, dice_weight=opt.loss_dice_weight,
-              max_pos_weight=opt.loss_max_pos_weight).to(device)
+              max_pos_weight=opt.loss_max_pos_weight, focal_weight=opt.loss_focal_weight,
+              focal_gamma=opt.loss_focal_gamma,
+              focal_threshold_scale=opt.loss_focal_threshold_scale,
+              focal_temperature=opt.loss_focal_temperature).to(device)
     net.apply(weights_init_kaiming)
     net.train()
     total_loss_list = []
@@ -323,6 +331,10 @@ def run_final_test() -> None:
         '--save_log', os.path.abspath(opt.run_dir),
         '--save_img_dir', os.path.join(os.path.abspath(opt.run_dir), 'results'),
         '--threshold', str(opt.threshold),
+        '--loss_focal_weight', str(opt.loss_focal_weight),
+        '--loss_focal_gamma', str(opt.loss_focal_gamma),
+        '--loss_focal_threshold_scale', str(opt.loss_focal_threshold_scale),
+        '--loss_focal_temperature', str(opt.loss_focal_temperature),
         '--no-save_img' if not opt.auto_test_save_img else '--save_img',
     ]
     print('Running automatic official test with:', opt.best_checkpoint_path)

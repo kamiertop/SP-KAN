@@ -11,7 +11,8 @@ from util.losses import TargetAwareBoundaryLoss, deep_supervision_loss
 
 class Net(nn.Module):
     def __init__(self, model_name, mode, loss_name='target_aware', boundary_weight=2.0,
-                 dice_weight=1.0, max_pos_weight=20.0):
+                 dice_weight=1.0, max_pos_weight=20.0, focal_weight=0.5,
+                 focal_gamma=2.0, focal_threshold_scale=0.2, focal_temperature=0.1):
         super().__init__()
         self.model_name = model_name
         if loss_name == 'bce':
@@ -21,6 +22,10 @@ class Net(nn.Module):
                 boundary_weight=boundary_weight,
                 dice_weight=dice_weight,
                 max_pos_weight=max_pos_weight,
+                focal_weight=focal_weight,
+                focal_gamma=focal_gamma,
+                focal_threshold_scale=focal_threshold_scale,
+                focal_temperature=focal_temperature,
             )
         else:
             raise ValueError(f'Unsupported loss: {loss_name}')
