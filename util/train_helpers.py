@@ -11,7 +11,8 @@ from util.losses import TargetAwareBoundaryLoss, deep_supervision_loss
 
 class Net(nn.Module):
     def __init__(self, model_name, mode, loss_name='target_aware', boundary_weight=2.0,
-                 dice_weight=1.0, max_pos_weight=20.0):
+                 dice_weight=1.0, max_pos_weight=20.0, projection='interp',
+                 mask_guided=True, mask_gate_floor=0.25):
         super().__init__()
         self.model_name = model_name
         if loss_name == 'bce':
@@ -27,7 +28,8 @@ class Net(nn.Module):
         self.loss_name = loss_name
         if model_name != 'SP_KAN':
             raise ValueError(f'Unsupported model: {model_name}')
-        self.model = SP_KAN(1, 1, mode=mode, deepsuper=True)
+        self.model = SP_KAN(1, 1, mode=mode, deepsuper=True, projection=projection,
+                            mask_guided=mask_guided, mask_gate_floor=mask_gate_floor)
         print('input channels: 1')
         print('---------------------------------------------------------------')
 

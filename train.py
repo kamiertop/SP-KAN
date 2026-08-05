@@ -65,6 +65,12 @@ parser.add_argument("--loss_dice_weight", type=float, default=1.0,
                     help="Dice term weight used by target_aware loss")
 parser.add_argument("--loss_max_pos_weight", type=float, default=20.0,
                     help="Maximum per-batch foreground reweighting")
+parser.add_argument("--projection", choices=['wavelet', 'interp'], default='interp',
+                    help="CViT K/V projection used by the checkpoint")
+parser.add_argument("--mask_guided", action=argparse.BooleanOptionalAction, default=True,
+                    help="Use coarse-mask gating on the deepest encoder skip")
+parser.add_argument("--mask_gate_floor", type=float, default=0.25,
+                    help="Minimum skip-feature gate value")
 
 global opt
 opt = parser.parse_args()
@@ -122,7 +128,8 @@ def train() -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = Net(model_name=opt.model_name, mode='train', loss_name=opt.loss_name,
               boundary_weight=opt.loss_boundary_weight, dice_weight=opt.loss_dice_weight,
-              max_pos_weight=opt.loss_max_pos_weight).to(device)
+              max_pos_weight=opt.loss_max_pos_weight, projection=opt.projection,
+              mask_guided=opt.mask_guided, mask_gate_floor=opt.mask_gate_floor).to(device)
     net.apply(weights_init_kaiming)
     net.train()
     total_loss_list = []
@@ -323,6 +330,9 @@ def run_final_test() -> None:
         '--save_log', os.path.abspath(opt.run_dir),
         '--save_img_dir', os.path.join(os.path.abspath(opt.run_dir), 'results'),
         '--threshold', str(opt.threshold),
+        '--projection', opt.projection,
+        '--mask_guided' if opt.mask_guided else '--no-mask_guided',
+        '--mask_gate_floor', str(opt.mask_gate_floor),
         '--no-save_img' if not opt.auto_test_save_img else '--save_img',
     ]
     print('Running automatic official test with:', opt.best_checkpoint_path)

@@ -54,6 +54,25 @@ class up_conv(nn.Module):
         return x
 
 
+class MaskGuidedSkipGate(nn.Module):
+    """Filter a skip feature with a coarse decoder mask while keeping a floor."""
+
+    def __init__(self, decoder_channels, skip_channels, floor=0.25):
+        super().__init__()
+        if not 0.0 < floor <= 1.0:
+            raise ValueError('mask gate floor must be in (0, 1]')
+        self.floor = float(floor)
+        self.mask = nn.Conv2d(decoder_channels, 1, kernel_size=1)
+        self.project = nn.Conv2d(skip_channels, skip_channels, kernel_size=1, bias=False)
+
+    def forward(self, decoder, skip):
+        if decoder.shape[-2:] != skip.shape[-2:]:
+            decoder = F.interpolate(decoder, size=skip.shape[-2:], mode='bilinear', align_corners=False)
+        mask = torch.sigmoid(self.mask(decoder))
+        gate = self.floor + (1.0 - self.floor) * mask
+        return self.project(skip) * gate, mask
+
+
 class depthwise_separable_conv(nn.Module):
     def __init__(self, in_ch, out_ch, stride=1, kernel_size=3, padding=1, bias=False):
         super().__init__()
@@ -455,6 +474,7 @@ class PatchEmbed(nn.Module):
 class SP_KAN(nn.Module):
     def __init__(self, in_ch=1, out_ch=1, mode='train', deepsuper=True,
                  embed_dims=[256], no_kan=False, drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
+                 mask_guided=True, mask_gate_floor=0.25,
                  depths=[1, 1, 1], **kwargs):
         super(SP_KAN, self).__init__()
 
@@ -463,6 +483,7 @@ class SP_KAN(nn.Module):
         self.deepsuper = deepsuper
         self.mode = mode
         self.no_kan = no_kan
+        self.mask_guided = mask_guided
         print('Deep-Supervision:', deepsuper)
 
         self.maxpool = nn.MaxPool2d(2)
@@ -497,6 +518,7 @@ class SP_KAN(nn.Module):
         self.br_conv5 = conv_block(embed_dims[0], embed_dims[0])
 
         self.Up5 = up_conv(filters[4], filters[3])
+        self.skip_gate5 = MaskGuidedSkipGate(filters[3], filters[3], mask_gate_floor) if mask_guided else None
         self.Up_conv5 = conv_block(filters[4], filters[3])
 
         self.Up4 = up_conv(filters[3], filters[2])
@@ -558,6 +580,8 @@ class SP_KAN(nn.Module):
         #  *********** **************
 
         d5 = self.Up5(out)  # 1 256 16 16
+        if self.mask_guided:
+            e4, self.last_skip_mask = self.skip_gate5(d5, e4)
         d5 = torch.cat((e4, d5), dim=1)
 
         d5 = self.Up_conv5(d5)  # 1 128 32 32

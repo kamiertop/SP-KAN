@@ -38,6 +38,11 @@ parser.add_argument("--save_img_dir", type=str, default=r'./Result/',
                     help="path of saved image")
 parser.add_argument("--save_log", type=str, default=r'./log/', help="path of saved .pth")
 parser.add_argument("--threshold", type=float, default=0.5)
+parser.add_argument("--projection", choices=['wavelet', 'interp'], default='interp',
+                    help="CViT K/V projection used by the checkpoint")
+parser.add_argument("--mask_guided", action=argparse.BooleanOptionalAction, default=True,
+                    help="Use coarse-mask gating on the deepest encoder skip")
+parser.add_argument("--mask_gate_floor", type=float, default=0.25)
 parser.add_argument("--max_test_steps", type=int, default=None,
                     help="Optional cap on evaluated batches (useful for smoke tests)")
 
@@ -60,7 +65,8 @@ def test() -> None:
     metric_f1 = F1(opt.threshold)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    net = SP_KAN(1, 1, mode='test', deepsuper=True).to(device)
+    net = SP_KAN(1, 1, mode='test', deepsuper=True, projection=opt.projection,
+                 mask_guided=opt.mask_guided, mask_gate_floor=opt.mask_gate_floor).to(device)
     if not os.path.isfile(opt.pth_dir):
         raise FileNotFoundError(
             f'Checkpoint not found: {opt.pth_dir}. Set --pth_dirs to a checkpoint relative to --save_log.'
