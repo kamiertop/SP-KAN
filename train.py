@@ -7,7 +7,6 @@ import sys
 import time
 from datetime import datetime
 
-import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from util.dataset_resize import *
@@ -58,6 +57,14 @@ parser.add_argument("--auto_test", action=argparse.BooleanOptionalAction, defaul
 parser.add_argument("--auto_test_save_img", action=argparse.BooleanOptionalAction, default=False,
                     help="Save prediction images during automatic final test")
 parser.add_argument("--resume", default=False, help="Resume from an existing checkpoint")
+parser.add_argument("--loss_name", choices=['target_aware', 'bce'], default='target_aware',
+                    help="Training loss; target_aware is the TABDS innovation, bce reproduces the baseline")
+parser.add_argument("--loss_boundary_weight", type=float, default=2.0,
+                    help="Boundary emphasis used by target_aware loss")
+parser.add_argument("--loss_dice_weight", type=float, default=1.0,
+                    help="Dice term weight used by target_aware loss")
+parser.add_argument("--loss_max_pos_weight", type=float, default=20.0,
+                    help="Maximum per-batch foreground reweighting")
 
 global opt
 opt = parser.parse_args()
@@ -113,7 +120,9 @@ def train() -> None:
                              shuffle=False, **worker_options)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    net = Net(model_name=opt.model_name, mode='train').to(device)
+    net = Net(model_name=opt.model_name, mode='train', loss_name=opt.loss_name,
+              boundary_weight=opt.loss_boundary_weight, dice_weight=opt.loss_dice_weight,
+              max_pos_weight=opt.loss_max_pos_weight).to(device)
     net.apply(weights_init_kaiming)
     net.train()
     total_loss_list = []
@@ -204,9 +213,7 @@ def train() -> None:
                         pred = pred
 
                     pred = postprocess_masks(pred, target_size, org_size)
-                    validation_loss_values.append(float(F.binary_cross_entropy(
-                        pred.clamp(1e-7, 1.0 - 1e-7), gt_mask
-                    ).detach().cpu()))
+                    validation_loss_values.append(float(net.loss(pred, gt_mask).detach().cpu()))
                     eval_mIoU.update((pred > opt.threshold).cpu(), gt_mask.cpu())
                     eval_PD_FA.update((pred[0, 0, :, :] > opt.threshold).cpu(),
                                       gt_mask[0, 0, :, :].cpu(), org_size)

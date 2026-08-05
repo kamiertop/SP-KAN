@@ -23,6 +23,39 @@ We present a Sparse-sine Perception Kolmogorov–Arnold Networks (SP-KAN) to the
 
 ## Usage
 
+### Research innovation branch: target-aware boundary deep supervision
+
+The paper (Section 4.1, Eq. (7)) trains every deep-supervision head with
+unweighted BCE. Its limitations section (Section 5.9, p. 16) specifically
+identifies incomplete contours and false alarms as remaining failure modes and
+proposes explicit edge representations as future work. This branch implements
+that follow-up idea as a reproducible hypothesis:
+
+* `TargetAwareBoundaryLoss` estimates the foreground/background ratio per batch
+  and caps the positive-pixel weight, avoiding domination by the background.
+* A 3x3 morphological gradient emphasizes target boundaries, while a soft Dice
+  term stabilizes training for one- or few-pixel targets.
+* Deep-supervision heads use normalized weights `(0.5, 0.5, 0.75, 1, 1, 1)` so
+  the loss scale is independent of the number of heads.
+
+The original BCE objective remains available with `--loss_name bce` for a
+direct ablation. Run the innovation branch with:
+
+Additional infrared-specific module, loss, robustness, and calibration ideas
+are catalogued in [INNOVATION_CATALOG.md](INNOVATION_CATALOG.md). The verified
+top-venue abstract scan and module-to-code integration map are available in
+[LITERATURE_STITCHING_REPORT.md](LITERATURE_STITCHING_REPORT.md).
+
+```bash
+git switch innovation/target-aware-boundary-loss
+bash scripts/run_target_aware.sh --epochs 1000
+```
+
+For a fast smoke test (without requiring the full dataset), use the same
+script with `--epochs 1 --max_train_steps 1 --no-auto_test` after placing a
+small compatible dataset under `datasets/`. Tune the three loss controls with
+`--loss_boundary_weight`, `--loss_dice_weight`, and `--loss_max_pos_weight`.
+
 #### 1. Data
 
 The **SIRST3** dataset, which combines **IRSTD-1K**, **NUDT-SIRST**, and **SIRST-v1**, is used to train SCTransNet.
@@ -142,9 +175,6 @@ author = {Shuai Yuan and Yu Liu and Xiaopei Zhang and Xiang Yan and Hanlin Qin a
 
 ## Contact
 **Welcome to raise issues or email to [yuansy@stu.xidian.edu.cn](shuaiyuan@hfut.edu.cn) for any question regarding our SP-KAN.**
-
-
-
 
 
 
