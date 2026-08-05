@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from datetime import datetime
 
 import torch.nn.functional as F
 from torch.autograd import Variable
@@ -33,8 +34,9 @@ parser.add_argument("--batchSize", type=int, default=8, help="Training batch siz
 # ******************* Others   *******************
 parser.add_argument("--patchSize", type=int, default=512, help="Training patch size")
 parser.add_argument("--patchSize_eva", type=int, default=512, help="Evaluation patch size")
-parser.add_argument("--save", default=r'./log', type=str, help="Save path of checkpoints")
-parser.add_argument("--log_dir", type=str, default="./otherlogs/SP_KAN", help='path of log files')
+parser.add_argument("--save", default=r'./log', type=str, help="Root directory for timestamped run artifacts")
+parser.add_argument("--log_dir", type=str, default="./otherlogs/SP_KAN",
+                    help='Root directory for timestamped TensorBoard logs')
 parser.add_argument("--img_norm_cfg", default=None)
 parser.add_argument("--threads", type=int, default=0, help="Number of threads for data loader to use")
 parser.add_argument("--max_train_steps", type=int, default=None,
@@ -71,6 +73,26 @@ def train() -> None:
             list_file.read().splitlines(), opt.val_ratio, opt.seed)
     if not train_names or not validation_names:
         raise ValueError('training validation split requires at least two train samples')
+    run_config = {}
+    for key, value in vars(opt).items():
+        if key == 'f':
+            continue
+        try:
+            json.dumps(value)
+        except TypeError:
+            continue
+        run_config[key] = value
+    run_config.update({
+        'run_id': opt.run_id,
+        'run_dir': opt.run_dir,
+        'checkpoint_dir': opt.checkpoint_dir,
+        'tensorboard_dir': opt.log_dir,
+        'train_samples': len(train_names),
+        'validation_samples': len(validation_names),
+    })
+    with open(opt.params_path, 'w', encoding='utf-8') as params_file:
+        json.dump(run_config, params_file, ensure_ascii=True, indent=2)
+        params_file.write('\n')
     train_set = TrainSetLoader_Re_Pad(dataset_dir=opt.dataset_dir, dataset_name=opt.dataset_name,
                                patch_size=opt.patchSize, img_norm_cfg=opt.img_norm_cfg,
                                sample_list=train_names, augment=True)
@@ -143,6 +165,9 @@ def train() -> None:
         epoch_seconds = time.time() - epoch_started
         print(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f, epoch_seconds---%.3f'
               % (idx_epoch + 1, epoch_loss, epoch_seconds))
+        opt.f.write(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f, epoch_seconds---%.3f\n'
+                    % (idx_epoch + 1, epoch_loss, epoch_seconds))
+        opt.f.flush()
 
         if (idx_epoch + 1) % opt.every_print == 0:  # tensorboard : write train loss
             print(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f, lr---%f,'
@@ -201,6 +226,9 @@ def train() -> None:
                 writer.add_scalar('Fa', results2[1], idx_epoch + 1)
                 print('Validation---Epoch---%d, val_loss---%f, mIoU---%f, F1---%f'
                       % (idx_epoch + 1, val_loss, results1[1], f1_score))
+                opt.f.write('Validation---Epoch---%d, val_loss---%f, mIoU---%f, F1---%f\n'
+                            % (idx_epoch + 1, val_loss, results1[1], f1_score))
+                opt.f.flush()
 
             # IOU
             if results1[1] > best_mIOU[1]:
@@ -216,7 +244,7 @@ def train() -> None:
                 best_Pd = format(results2[0], '.4f')
                 best_Fa = format(results2[1], '.6f')
 
-                save_pth = opt.save + '/' + opt.dataset_name + '/' + opt.model_name + '_' + str(
+                save_pth = opt.checkpoint_dir + '/' + opt.model_name + '_' + str(
                     idx_epoch + 1) + '_' + str(best_IOU) + "_" + str(best_Pd) + "_" + str(best_Fa) + "_" + '.pth.tar'
                 save_checkpoint({
                     'epoch': idx_epoch + 1,
@@ -235,7 +263,7 @@ def train() -> None:
                 best_IOU = format(results1[1], '.4f')
                 best_Pd = format(results2[0], '.4f')
                 best_Fa = format(results2[1], '.6f')
-                save_pth = opt.save + '/' + opt.dataset_name + '/' + opt.model_name + 'PdPd' + '_Epoch' + str(
+                save_pth = opt.checkpoint_dir + '/' + opt.model_name + 'PdPd' + '_Epoch' + str(
                     idx_epoch + 1) + '_' + str(best_IOU) + '_' + str(best_Pd) + "_" + str(best_Fa) + "_" + '.pth.tar'
                 save_checkpoint({
                     'epoch': idx_epoch + 1,
@@ -246,7 +274,7 @@ def train() -> None:
         evaluated = (idx_epoch + 1) >= opt.begin_validation and (
             idx_epoch + 1) % opt.every_validation == 0
         record = {
-            'run_id': f'{opt.dataset_name}_{opt.model_name}',
+            'run_id': opt.run_id,
             'epoch': idx_epoch + 1,
             'lr': float(scheduler.get_last_lr()[0]),
             'train_loss': epoch_loss,
@@ -265,21 +293,28 @@ def train() -> None:
             print('Early stopping at epoch %d: validation mIoU did not improve for %d validation checks.'
                   % (idx_epoch + 1, validation_checks_without_improvement))
             break
+    writer.close()
 
 if __name__ == '__main__':
+    save_root = opt.save
+    tensorboard_root = opt.log_dir
     for dataset_name in opt.dataset_names:
         opt.dataset_name = dataset_name
         for model_name in opt.model_names:
             opt.model_name = model_name
-            if not os.path.exists(opt.save):
-                os.makedirs(opt.save)
-            opt.f = open(opt.save + '/' + opt.dataset_name + '_' + opt.model_name + '_' + (time.ctime()).replace(' ',
-                                                                                                                 '_').replace(
-                ':', '_') + '.txt', 'w')
-            opt.metrics_path = opt.save + '/' + opt.dataset_name + '_' + opt.model_name + '_metrics.jsonl'
+            run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            opt.run_id = f'{opt.dataset_name}_{opt.model_name}_{run_timestamp}'
+            opt.run_dir = os.path.join(save_root, opt.run_id)
+            opt.checkpoint_dir = os.path.join(opt.run_dir, 'checkpoints')
+            opt.log_dir = os.path.join(tensorboard_root, opt.run_id)
+            os.makedirs(opt.checkpoint_dir, exist_ok=True)
+            os.makedirs(opt.log_dir, exist_ok=True)
+            opt.params_path = os.path.join(opt.run_dir, 'train_config.json')
+            opt.f = open(os.path.join(opt.run_dir, 'train.log'), 'w', encoding='utf-8', buffering=1)
+            opt.metrics_path = os.path.join(opt.run_dir, 'metrics.jsonl')
             with open(opt.metrics_path, 'w') as metrics_file:
                 json.dump({
-                    'run_id': f'{opt.dataset_name}_{opt.model_name}',
+                    'run_id': opt.run_id,
                     'dataset': opt.dataset_name,
                     'model': opt.model_name,
                     'epochs': opt.epochs,
@@ -290,6 +325,9 @@ if __name__ == '__main__':
                     'early_stopping_patience': opt.early_stopping_patience,
                     'early_stopping_min_delta': opt.early_stopping_min_delta,
                     'min_epochs': opt.min_epochs,
+                    'run_dir': opt.run_dir,
+                    'checkpoint_dir': opt.checkpoint_dir,
+                    'tensorboard_dir': opt.log_dir,
                 }, metrics_file, ensure_ascii=True)
                 metrics_file.write('\n')
             print(opt.dataset_name + '\t' + opt.model_name)
