@@ -206,6 +206,41 @@ class CViT(nn.Module):
         return out
 
 
+class FocalContextBlock(nn.Module):
+    """Depthwise hierarchical context with content-adaptive modulation.
+
+    This is a compact FocalNet/SegNeXt-inspired replacement for selected CViT
+    stages.  It keeps the same feature-map contract and leaves SPKAL untouched.
+    """
+
+    def __init__(self, dim):
+        super().__init__()
+        self.norm1 = LayerNorm3d(dim, LayerNorm_type='WithBias')
+        self.context3 = nn.Conv2d(dim, dim, 3, padding=1, groups=dim, bias=False)
+        self.context5 = nn.Conv2d(dim, dim, 5, padding=2, groups=dim, bias=False)
+        self.context7 = nn.Conv2d(dim, dim, 7, padding=3, groups=dim, bias=False)
+        self.context_proj = nn.Conv2d(dim * 3, dim, 1, bias=False)
+        self.gate = nn.Conv2d(dim * 2, dim, 1)
+        nn.init.constant_(self.gate.bias, -2.0)
+        self.norm2 = LayerNorm3d(dim, LayerNorm_type='WithBias')
+        self.ffn = nn.Sequential(
+            nn.Conv2d(dim, dim * 2, 1, bias=False),
+            nn.GELU(),
+            nn.Conv2d(dim * 2, dim, 1, bias=False),
+        )
+
+    def forward(self, x):
+        normalized = self.norm1(x)
+        context = self.context_proj(torch.cat((
+            self.context3(normalized),
+            self.context5(normalized),
+            self.context7(normalized),
+        ), dim=1))
+        gate = torch.sigmoid(self.gate(torch.cat((normalized, context), dim=1)))
+        out = x + gate * context
+        return out + self.ffn(self.norm2(out))
+
+
 class RelativePositionBias(nn.Module):
     def __init__(self, num_heads, h, w):
         super().__init__()
@@ -455,6 +490,7 @@ class PatchEmbed(nn.Module):
 class SP_KAN(nn.Module):
     def __init__(self, in_ch=1, out_ch=1, mode='train', deepsuper=True,
                  embed_dims=[256], no_kan=False, drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
+                 context='focal',
                  depths=[1, 1, 1], **kwargs):
         super(SP_KAN, self).__init__()
 
@@ -463,6 +499,9 @@ class SP_KAN(nn.Module):
         self.deepsuper = deepsuper
         self.mode = mode
         self.no_kan = no_kan
+        if context not in ('focal', 'cvit'):
+            raise ValueError("context must be 'focal' or 'cvit'")
+        self.context = context
         print('Deep-Supervision:', deepsuper)
 
         self.maxpool = nn.MaxPool2d(2)
@@ -471,8 +510,8 @@ class SP_KAN(nn.Module):
 
         self.TransH1 = CViT(filters[0], 1)
         self.TransH2 = CViT(filters[1], 1)
-        self.TransH3 = CViT(filters[2], 1)
-        self.TransH4 = CViT(filters[3], 1)
+        self.TransH3 = FocalContextBlock(filters[2]) if context == 'focal' else CViT(filters[2], 1)
+        self.TransH4 = FocalContextBlock(filters[3]) if context == 'focal' else CViT(filters[3], 1)
         self.TransH5 = CViT(filters[4], 1)
 
         self.stem = conv_block(in_ch, filters[0])
