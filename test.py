@@ -546,6 +546,14 @@ def evaluation_jobs(model_names, dataset_names, checkpoint_paths):
     )
 
 
+def resolve_checkpoint_path(checkpoint_path, save_log):
+    """Resolve absolute, existing relative, or save-log-relative checkpoints."""
+    checkpoint_path = os.path.expanduser(checkpoint_path)
+    if os.path.isabs(checkpoint_path) or os.path.isfile(checkpoint_path):
+        return os.path.abspath(checkpoint_path)
+    return os.path.abspath(os.path.join(save_log, checkpoint_path))
+
+
 def main():
     global opt
     opt = parser.parse_args()
@@ -558,7 +566,7 @@ def main():
             opt.model_name = model_name
             opt.train_dataset_name = dataset_name
             opt.test_dataset_name = dataset_name
-            opt.pth_dir = pth_dir if os.path.isabs(pth_dir) else os.path.join(opt.save_log, pth_dir)
+            opt.pth_dir = resolve_checkpoint_path(pth_dir, opt.save_log)
             print(pth_dir)
             print(dataset_name)
             opt.f.write(f'{pth_dir}\n{dataset_name}\n')
