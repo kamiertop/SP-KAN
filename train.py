@@ -43,6 +43,12 @@ parser.add_argument("--threshold", type=float, default=0.5, help="Threshold for 
 parser.add_argument("--seed", type=int, default=42, help="Threshold for test")
 parser.add_argument("--val_ratio", type=float, default=0.1,
                     help="Fraction of train_*.txt reserved for validation")
+parser.add_argument("--early_stopping_patience", type=int, default=50,
+                    help="Stop after this many validation checks without mIoU improvement (0 disables)")
+parser.add_argument("--early_stopping_min_delta", type=float, default=1e-5,
+                    help="Minimum validation mIoU improvement counted by early stopping")
+parser.add_argument("--min_epochs", type=int, default=1,
+                    help="Do not early-stop before this many epochs")
 parser.add_argument("--resume", default=False, help="Resume from an existing checkpoint")
 
 global opt
@@ -96,8 +102,19 @@ def train() -> None:
 
 
     opt.nEpochs = opt.scheduler_settings['epochs']
+    if opt.early_stopping_patience < 0:
+        raise ValueError('early_stopping_patience must be non-negative')
+    if opt.early_stopping_min_delta < 0:
+        raise ValueError('early_stopping_min_delta must be non-negative')
+    if opt.min_epochs < 1:
+        raise ValueError('min_epochs must be at least 1')
     optimizer, scheduler = get_optimizer(net, opt.optimizer_name, opt.scheduler_name, opt.optimizer_settings,
                                          opt.scheduler_settings)
+
+    best_mIOU = [0, -float('inf')]
+    best_Pd_Fa = [0, 1]
+    best_validation_miou = -float('inf')
+    validation_checks_without_improvement = 0
 
     for idx_epoch in range(0, opt.nEpochs):
         epoch_started = time.time()
@@ -136,10 +153,6 @@ def train() -> None:
             writer.add_scalar('loss', epoch_loss, idx_epoch + 1)
             writer.add_scalar('lr', scheduler.get_last_lr()[0], idx_epoch + 1)
 
-        if idx_epoch == 0:
-            best_mIOU = results1
-            best_Pd_Fa = results2
-
         if (idx_epoch + 1) >= opt.begin_validation and (
                 idx_epoch + 1) % opt.every_validation == 0:  # TensorBoard: validation metrics
             # *******************************************************************************************************
@@ -175,6 +188,12 @@ def train() -> None:
                 results2 = eval_PD_FA.get()
                 f1_score = Metric.get()
                 val_loss = float(np.mean(validation_loss_values))
+                validation_improved = results1[1] > best_validation_miou + opt.early_stopping_min_delta
+                if validation_improved:
+                    best_validation_miou = results1[1]
+                    validation_checks_without_improvement = 0
+                else:
+                    validation_checks_without_improvement += 1
                 writer.add_scalar('val_loss', val_loss, idx_epoch + 1)
                 writer.add_scalar('mIOU', results1[-1], idx_epoch + 1)
                 writer.add_scalar('F1', f1_score, idx_epoch + 1)
@@ -241,6 +260,12 @@ def train() -> None:
         with open(opt.metrics_path, 'a') as metrics_file:
             metrics_file.write(json.dumps(record, ensure_ascii=True) + '\n')
 
+        if evaluated and opt.early_stopping_patience > 0 and (idx_epoch + 1) >= opt.min_epochs \
+                and validation_checks_without_improvement >= opt.early_stopping_patience:
+            print('Early stopping at epoch %d: validation mIoU did not improve for %d validation checks.'
+                  % (idx_epoch + 1, validation_checks_without_improvement))
+            break
+
 if __name__ == '__main__':
     for dataset_name in opt.dataset_names:
         opt.dataset_name = dataset_name
@@ -262,6 +287,9 @@ if __name__ == '__main__':
                     'patch_size': opt.patchSize,
                     'seed': opt.seed,
                     'val_ratio': opt.val_ratio,
+                    'early_stopping_patience': opt.early_stopping_patience,
+                    'early_stopping_min_delta': opt.early_stopping_min_delta,
+                    'min_epochs': opt.min_epochs,
                 }, metrics_file, ensure_ascii=True)
                 metrics_file.write('\n')
             print(opt.dataset_name + '\t' + opt.model_name)

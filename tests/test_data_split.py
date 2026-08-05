@@ -34,6 +34,8 @@ class DataSplitTests(unittest.TestCase):
         self.assertIn("--begin_validation", source)
         self.assertIn("--every_validation", source)
         self.assertIn("val_loss", source)
+        self.assertIn("--early_stopping_patience", source)
+        self.assertIn("validation_checks_without_improvement", source)
 
     def test_test_loader_reads_official_test_list(self):
         dataset = pathlib.Path(__file__).parents[1] / "datasets" / "SIRST3"
