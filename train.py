@@ -163,17 +163,13 @@ def train() -> None:
         epoch_loss = float(np.mean(epoch_loss_values))
         total_loss_list.append(epoch_loss)
         epoch_seconds = time.time() - epoch_started
-        print(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f, epoch_seconds---%.3f'
-              % (idx_epoch + 1, epoch_loss, epoch_seconds))
-        opt.f.write(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f, epoch_seconds---%.3f\n'
-                    % (idx_epoch + 1, epoch_loss, epoch_seconds))
+        epoch_log = time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f, lr---%f, epoch_seconds---%.3f' \
+            % (idx_epoch + 1, epoch_loss, scheduler.get_last_lr()[0], epoch_seconds)
+        print(epoch_log)
+        opt.f.write(epoch_log + '\n')
         opt.f.flush()
 
         if (idx_epoch + 1) % opt.every_print == 0:  # tensorboard : write train loss
-            print(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f, lr---%f,'
-                  % (idx_epoch + 1, epoch_loss, scheduler.get_last_lr()[0]))
-            opt.f.write(time.ctime()[4:-5] + ' Epoch---%d, train_loss---%f,\n'
-                        % (idx_epoch + 1, epoch_loss))
             # Log the scalar values
             writer.add_scalar('loss', epoch_loss, idx_epoch + 1)
             writer.add_scalar('lr', scheduler.get_last_lr()[0], idx_epoch + 1)
