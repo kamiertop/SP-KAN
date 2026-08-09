@@ -317,12 +317,8 @@ def train() -> None:
     writer.close()
 
 
-def run_final_test() -> None:
-    """Evaluate the selected checkpoint on the official test list."""
-    if not opt.best_checkpoint_path or not os.path.isfile(opt.best_checkpoint_path):
-        print('No validation checkpoint was saved; skipping automatic final test.')
-        return
-    test_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test.py')
+def build_final_test_command(test_script: str) -> list[str]:
+    """Build a test.py command matching the trained model structure."""
     command = [
         sys.executable, test_script,
         '--model_names', opt.model_name,
@@ -334,6 +330,20 @@ def run_final_test() -> None:
         '--threshold', str(opt.threshold),
         '--no-save_img' if not opt.auto_test_save_img else '--save_img',
     ]
+    if opt.cross_view:
+        command.extend(['--cross_view', '--cross_view_topk', str(opt.cross_view_topk)])
+    if opt.mamba_branch:
+        command.append('--mamba_branch')
+    return command
+
+
+def run_final_test() -> None:
+    """Evaluate the selected checkpoint on the official test list."""
+    if not opt.best_checkpoint_path or not os.path.isfile(opt.best_checkpoint_path):
+        print('No validation checkpoint was saved; skipping automatic final test.')
+        return
+    test_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test.py')
+    command = build_final_test_command(test_script)
     print('Running automatic official test with:', opt.best_checkpoint_path)
     subprocess.run(command, check=True)
 
