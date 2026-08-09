@@ -27,7 +27,7 @@ from util.dataset_resize import *
 from util.metrics import *
 from util.utils import *
 from torch.utils.tensorboard import SummaryWriter
-from util.train_helpers import Net, postprocess_masks, save_checkpoint, weights_init_kaiming
+from util.train_helpers import Net, align_prediction_to_target, save_checkpoint, weights_init_kaiming
 from util.data_split import split_train_validation
 
 parser = argparse.ArgumentParser(description="PyTorch BasicIRSTD train")
@@ -250,7 +250,7 @@ def train() -> None:
                     else:
                         pred = pred
 
-                    pred = postprocess_masks(pred, target_size, org_size)
+                    pred = align_prediction_to_target(pred, gt_mask, target_size, org_size)
                     validation_loss_values.append(float(net.loss(pred, gt_mask).detach().cpu()))
                     eval_mIoU.update((pred > opt.threshold).cpu(), gt_mask.cpu())
                     eval_PD_FA.update((pred[0, 0, :, :] > opt.threshold).cpu(),

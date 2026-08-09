@@ -82,3 +82,11 @@ def postprocess_masks(pred, input_size, original_size):
     original_size = tuple(int(v.item()) if isinstance(v, torch.Tensor) else int(v) for v in original_size)
     pred = pred[..., :input_size[0], :input_size[1]]
     return F.interpolate(pred, original_size, mode='bilinear', align_corners=False)
+
+
+def align_prediction_to_target(pred, gt_mask, input_size, original_size):
+    """Restore an evaluation prediction and guarantee its shape matches its label."""
+    pred = postprocess_masks(pred, input_size, original_size)
+    if pred.shape[-2:] != gt_mask.shape[-2:]:
+        pred = F.interpolate(pred, size=gt_mask.shape[-2:], mode='bilinear', align_corners=False)
+    return pred
