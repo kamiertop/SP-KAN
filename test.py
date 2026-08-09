@@ -3,7 +3,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from collections.abc import Sequence
+
+
+def configure_cuda_visible_devices(argv: list[str]) -> str | None:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--gpu_id", "--gpu", dest="gpu_id", choices=["0", "1"])
+    pre_args, _ = pre_parser.parse_known_args(argv)
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    if pre_args.gpu_id is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = pre_args.gpu_id
+    return pre_args.gpu_id
+
+
+_requested_gpu_id = configure_cuda_visible_devices(sys.argv[1:])
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 from torch.utils.data import DataLoader
@@ -30,6 +44,8 @@ parser.add_argument("--dataset_names", default=['SIRST3'], nargs='+',
                     help="dataset_name: 'SIRST3','NUAA-SIRST', 'NUDT-SIRST', 'IRSTD-1K'")
 parser.add_argument("--patchSize_eva", type=int, default=512, help="Evaluation patch size")
 parser.add_argument("--threads", type=int, default=0, help="Number of data loader workers")
+parser.add_argument("--gpu_id", "--gpu", dest="gpu_id", choices=["0", "1"], default=_requested_gpu_id,
+                    help="Physical GPU id exposed to this process via CUDA_VISIBLE_DEVICES")
 parser.add_argument("--img_norm_cfg", default=None,
                     help="specific a img_norm_cfg, default=None (using img_norm_cfg values of each dataset)")
 parser.add_argument("--save_img", "--save-img", default=True, action=argparse.BooleanOptionalAction,

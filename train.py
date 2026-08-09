@@ -2,10 +2,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
 from datetime import datetime
+
+
+def configure_cuda_visible_devices(argv: list[str]) -> str | None:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--gpu_id", "--gpu", dest="gpu_id", choices=["0", "1"])
+    pre_args, _ = pre_parser.parse_known_args(argv)
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    if pre_args.gpu_id is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = pre_args.gpu_id
+    return pre_args.gpu_id
+
+
+_requested_gpu_id = configure_cuda_visible_devices(sys.argv[1:])
 
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
@@ -15,7 +29,6 @@ from util.utils import *
 from torch.utils.tensorboard import SummaryWriter
 from util.train_helpers import Net, postprocess_masks, save_checkpoint, weights_init_kaiming
 from util.data_split import split_train_validation
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 parser = argparse.ArgumentParser(description="PyTorch BasicIRSTD train")
 parser.add_argument("--model_names", default=['SP_KAN'], nargs='+', help="Models to train")
@@ -32,6 +45,8 @@ parser.add_argument("--every_print", default=10, type=int)
 
 parser.add_argument("--dataset_dir", default=r'./datasets')
 parser.add_argument("--batchSize", type=int, default=8, help="Training batch sizse")
+parser.add_argument("--gpu_id", "--gpu", dest="gpu_id", choices=["0", "1"], default=_requested_gpu_id,
+                    help="Physical GPU id exposed to this process via CUDA_VISIBLE_DEVICES")
 # ******************* Others   *******************
 parser.add_argument("--patchSize", type=int, default=512, help="Training patch size")
 parser.add_argument("--patchSize_eva", type=int, default=512, help="Evaluation patch size")
@@ -334,6 +349,8 @@ def build_final_test_command(test_script: str) -> list[str]:
         command.extend(['--cross_view', '--cross_view_topk', str(opt.cross_view_topk)])
     if opt.mamba_branch:
         command.append('--mamba_branch')
+    if opt.gpu_id is not None:
+        command.extend(['--gpu_id', opt.gpu_id])
     return command
 
 

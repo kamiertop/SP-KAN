@@ -27,12 +27,15 @@ class TrainAutoTestCommandTests(unittest.TestCase):
             cross_view=False,
             cross_view_topk=0.2,
             mamba_branch=True,
+            gpu_id='1',
         )
 
         command = train.build_final_test_command('/tmp/test.py')
 
         self.assertIn('--mamba_branch', command)
         self.assertIn('--no-save_img', command)
+        self.assertIn('--gpu_id', command)
+        self.assertIn('1', command)
 
     def test_cross_view_settings_are_forwarded_to_final_test(self):
         train = import_train_module()
@@ -47,6 +50,7 @@ class TrainAutoTestCommandTests(unittest.TestCase):
             cross_view=True,
             cross_view_topk=0.15,
             mamba_branch=False,
+            gpu_id=None,
         )
 
         command = train.build_final_test_command('/tmp/test.py')
