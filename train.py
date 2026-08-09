@@ -61,6 +61,8 @@ parser.add_argument("--threshold", type=float, default=0.5, help="Threshold for 
 parser.add_argument("--seed", type=int, default=42, help="Threshold for test")
 parser.add_argument("--val_ratio", type=float, default=0.1,
                     help="Fraction of train_*.txt reserved for validation")
+parser.add_argument("--validation_source", choices=['train_split', 'official_test'], default='train_split',
+                    help="Evaluation data: hold out part of train list, or reuse the official test list per epoch")
 parser.add_argument("--early_stopping_patience", type=int, default=50,
                     help="Stop after this many validation checks without mIoU improvement (0 disables)")
 parser.add_argument("--early_stopping_min_delta", type=float, default=1e-5,
@@ -97,17 +99,28 @@ print('batchSize: {0} -- begin_validation: {1} -- every_print: {2} -- every_vali
                                                                                         opt.every_validation))
 
 
+def resolve_training_and_validation_names(
+        dataset_dir: str, dataset_name: str, validation_source: str,
+        val_ratio: float, seed: int) -> tuple[list[str], list[str]]:
+    """Read the train list and choose the periodic evaluation list."""
+    index_dir = os.path.join(dataset_dir, dataset_name, 'img_idx')
+    with open(os.path.join(index_dir, 'train_' + dataset_name + '.txt'), encoding='utf-8') as list_file:
+        train_names = list_file.read().splitlines()
+
+    if validation_source == 'official_test':
+        with open(os.path.join(index_dir, 'test_' + dataset_name + '.txt'), encoding='utf-8') as list_file:
+            return train_names, list_file.read().splitlines()
+    return split_train_validation(train_names, val_ratio, seed)
+
+
 def train() -> None:
     # *******************************************************************************************************
     #                                             Train
     # *******************************************************************************************************
-    train_list_path = os.path.join(opt.dataset_dir, opt.dataset_name, 'img_idx',
-                                   'train_' + opt.dataset_name + '.txt')
-    with open(train_list_path, encoding='utf-8') as list_file:
-        train_names, validation_names = split_train_validation(
-            list_file.read().splitlines(), opt.val_ratio, opt.seed)
+    train_names, validation_names = resolve_training_and_validation_names(
+        opt.dataset_dir, opt.dataset_name, opt.validation_source, opt.val_ratio, opt.seed)
     if not train_names or not validation_names:
-        raise ValueError('training validation split requires at least two train samples')
+        raise ValueError('training and periodic evaluation lists must both contain at least one sample')
     run_config = {}
     for key, value in vars(opt).items():
         if key == 'f':
@@ -124,6 +137,7 @@ def train() -> None:
         'tensorboard_dir': opt.log_dir,
         'train_samples': len(train_names),
         'validation_samples': len(validation_names),
+        'validation_source': opt.validation_source,
     })
     with open(opt.params_path, 'w', encoding='utf-8') as params_file:
         json.dump(run_config, params_file, ensure_ascii=True, indent=2)
@@ -392,6 +406,7 @@ if __name__ == '__main__':
                     'patch_size': opt.patchSize,
                     'seed': opt.seed,
                     'val_ratio': opt.val_ratio,
+                    'validation_source': opt.validation_source,
                     'early_stopping_patience': opt.early_stopping_patience,
                     'early_stopping_min_delta': opt.early_stopping_min_delta,
                     'min_epochs': opt.min_epochs,

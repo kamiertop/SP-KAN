@@ -1,11 +1,38 @@
 import ast
+import importlib
 import pathlib
+import sys
+import tempfile
 import unittest
 
 from util.data_split import split_train_validation
 
 
+def import_train_module():
+    original_argv = sys.argv
+    try:
+        sys.argv = ['train.py']
+        return importlib.import_module('train')
+    finally:
+        sys.argv = original_argv
+
+
 class DataSplitTests(unittest.TestCase):
+    def test_official_test_validation_uses_all_training_samples(self):
+        resolve_training_and_validation_names = import_train_module().resolve_training_and_validation_names
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            index_dir = pathlib.Path(temp_dir) / 'SIRST3' / 'img_idx'
+            index_dir.mkdir(parents=True)
+            (index_dir / 'train_SIRST3.txt').write_text('train-a\ntrain-b\n')
+            (index_dir / 'test_SIRST3.txt').write_text('test-a\ntest-b\n')
+
+            train, validation = resolve_training_and_validation_names(
+                temp_dir, 'SIRST3', 'official_test', 0.1, 42)
+
+        self.assertEqual(train, ['train-a', 'train-b'])
+        self.assertEqual(validation, ['test-a', 'test-b'])
+
     def test_train_and_validation_are_disjoint(self):
         names = [f"sample-{i}" for i in range(20)]
         train, validation = split_train_validation(names, val_ratio=0.1, seed=7)
