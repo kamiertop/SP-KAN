@@ -74,14 +74,8 @@ parser.add_argument("--auto_test", action=argparse.BooleanOptionalAction, defaul
 parser.add_argument("--auto_test_save_img", action=argparse.BooleanOptionalAction, default=False,
                     help="Save prediction images during automatic final test")
 parser.add_argument("--resume", default=False, help="Resume from an existing checkpoint")
-parser.add_argument("--loss_name", choices=['target_aware', 'bce'], default='target_aware',
-                    help="Training loss; target_aware is the TABDS innovation, bce reproduces the baseline")
-parser.add_argument("--loss_boundary_weight", type=float, default=2.0,
-                    help="Boundary emphasis used by target_aware loss")
-parser.add_argument("--loss_dice_weight", type=float, default=1.0,
-                    help="Dice term weight used by target_aware loss")
-parser.add_argument("--loss_max_pos_weight", type=float, default=20.0,
-                    help="Maximum per-batch foreground reweighting")
+parser.add_argument("--loss_name", choices=['bce'], default='bce',
+                    help="Pixel loss (BCE is the supported training objective)")
 parser.add_argument("--cross_view", action=argparse.BooleanOptionalAction, default=False,
                     help="Enable clean/noisy cross-view alignment and Top-K background fusion")
 parser.add_argument("--cross_view_noise_std", type=float, default=0.03)
@@ -91,6 +85,8 @@ parser.add_argument("--cross_view_consistency_weight", type=float, default=0.1,
                     help="Weight of clean/noisy prediction consistency loss")
 parser.add_argument("--mamba_branch", action=argparse.BooleanOptionalAction, default=False,
                     help="Enable MiM-ISTD local/global selective state-space block at deepest stage")
+parser.add_argument("--central_contrast", action=argparse.BooleanOptionalAction, default=False,
+                    help="Enable MoCoP-style central-difference contrast on decoder skips")
 
 global opt
 opt = parser.parse_args()
@@ -159,12 +155,12 @@ def train() -> None:
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = Net(model_name=opt.model_name, mode='train', loss_name=opt.loss_name,
-              boundary_weight=opt.loss_boundary_weight, dice_weight=opt.loss_dice_weight,
-              max_pos_weight=opt.loss_max_pos_weight, cross_view=opt.cross_view,
+              cross_view=opt.cross_view,
               cross_view_noise_std=opt.cross_view_noise_std,
               cross_view_topk=opt.cross_view_topk,
               cross_view_consistency_weight=opt.cross_view_consistency_weight,
-              mamba_branch=opt.mamba_branch).to(device)
+              mamba_branch=opt.mamba_branch,
+              central_contrast=opt.central_contrast).to(device)
     net.apply(weights_init_kaiming)
     net.train()
     total_loss_list = []
@@ -367,6 +363,8 @@ def build_final_test_command(test_script: str) -> list[str]:
         command.extend(['--cross_view', '--cross_view_topk', str(opt.cross_view_topk)])
     if opt.mamba_branch:
         command.append('--mamba_branch')
+    if opt.central_contrast:
+        command.append('--central_contrast')
     if opt.gpu_id is not None:
         command.extend(['--gpu_id', opt.gpu_id])
     return command
