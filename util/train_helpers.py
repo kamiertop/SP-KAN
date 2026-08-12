@@ -46,9 +46,11 @@ class Net(nn.Module):
         return clean
 
     def loss(self, preds, gt_masks):
-        # Every deep-supervision head uses the same batched ground-truth mask.
+        # Keep the paper's equally weighted six-head BCE objective as a sum.
+        # Averaging weakens the sparse foreground gradient by the number of
+        # heads and can make the all-background solution attractive.
         if isinstance(preds, (list, tuple)):
-            loss = sum(self.cal_loss(pred, gt_masks) for pred in preds) / len(preds)
+            loss = sum(self.cal_loss(pred, gt_masks) for pred in preds)
         else:
             loss = self.cal_loss(preds, gt_masks)
         # Cross-view alignment is orthogonal to the pixel loss and should also
