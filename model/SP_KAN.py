@@ -224,6 +224,9 @@ class MiMISTDBlock(nn.Module):
         self.proj = nn.Conv2d(channels, channels, 1)
         self.ffn = nn.Sequential(nn.Conv2d(channels, channels * 2, 1), nn.GELU(),
                                  nn.Conv2d(channels * 2, channels, 1))
+        # Start as an exact identity so adding the branch cannot destroy the
+        # pretrained SP-KAN optimization path during the first epochs.
+        self.res_scale = nn.Parameter(torch.zeros(1))
 
     def _scan(self, x):
         # recurrent exponential moving average, with data-dependent update gate
@@ -251,7 +254,8 @@ class MiMISTDBlock(nn.Module):
         global_ctx = self._scan(self.v(y))
         gate = torch.sigmoid(self.q(y))
         fused = self.proj(local + gate * global_ctx)
-        return x + fused + self.ffn(self.norm(x + fused))
+        update = fused + self.ffn(self.norm(x + fused))
+        return x + self.res_scale * update
 
 
 class RelativePositionBias(nn.Module):
