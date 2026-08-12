@@ -87,6 +87,8 @@ parser.add_argument("--cross_view", action=argparse.BooleanOptionalAction, defau
 parser.add_argument("--cross_view_noise_std", type=float, default=0.03)
 parser.add_argument("--cross_view_topk", type=float, default=0.2,
                     help="Fraction of lowest-response locations used as background prototypes")
+parser.add_argument("--cross_view_consistency_weight", type=float, default=0.1,
+                    help="Weight of clean/noisy prediction consistency loss")
 parser.add_argument("--mamba_branch", action=argparse.BooleanOptionalAction, default=False,
                     help="Enable MiM-ISTD local/global selective state-space block at deepest stage")
 
@@ -160,7 +162,9 @@ def train() -> None:
               boundary_weight=opt.loss_boundary_weight, dice_weight=opt.loss_dice_weight,
               max_pos_weight=opt.loss_max_pos_weight, cross_view=opt.cross_view,
               cross_view_noise_std=opt.cross_view_noise_std,
-              cross_view_topk=opt.cross_view_topk, mamba_branch=opt.mamba_branch).to(device)
+              cross_view_topk=opt.cross_view_topk,
+              cross_view_consistency_weight=opt.cross_view_consistency_weight,
+              mamba_branch=opt.mamba_branch).to(device)
     net.apply(weights_init_kaiming)
     net.train()
     total_loss_list = []

@@ -12,7 +12,8 @@ from util.losses import TargetAwareBoundaryLoss, deep_supervision_loss
 class Net(nn.Module):
     def __init__(self, model_name, mode, loss_name='target_aware', boundary_weight=2.0,
                  dice_weight=1.0, max_pos_weight=20.0, cross_view=False,
-                 cross_view_noise_std=0.03, cross_view_topk=0.2, mamba_branch=False):
+                 cross_view_noise_std=0.03, cross_view_topk=0.2,
+                 cross_view_consistency_weight=0.1, mamba_branch=False):
         super().__init__()
         self.model_name = model_name
         if loss_name == 'bce':
@@ -30,6 +31,9 @@ class Net(nn.Module):
             raise ValueError(f'Unsupported model: {model_name}')
         self.cross_view = cross_view
         self.cross_view_noise_std = cross_view_noise_std
+        self.cross_view_consistency_weight = float(cross_view_consistency_weight)
+        if self.cross_view_consistency_weight < 0:
+            raise ValueError('cross_view_consistency_weight must be non-negative')
         self.mamba_branch = mamba_branch
         self.model = SP_KAN(1, 1, mode=mode, deepsuper=True,
                             cross_view_branch=cross_view, cross_view_topk=cross_view_topk,
@@ -52,12 +56,19 @@ class Net(nn.Module):
     def loss(self, preds, gt_masks):
         if isinstance(self.cal_loss, TargetAwareBoundaryLoss):
             loss = deep_supervision_loss(self.cal_loss, preds, gt_masks)
-            return loss + (0.1 * self._consistency if self._consistency is not None else 0.0)
-        if isinstance(preds, list):
-            return sum(self.cal_loss(pred, gt_masks[i]) for i, pred in enumerate(preds)) / len(preds)
-        if isinstance(preds, tuple):
-            return sum(self.cal_loss(pred, gt_masks) for pred in preds)
-        return self.cal_loss(preds, gt_masks)
+        else:
+            # Every deep-supervision head must use the *same batched* ground-truth
+            # mask.  Indexing ``gt_masks[i]`` here selects sample i from the batch,
+            # which silently broadcasts a different label onto each head and makes
+            # BCE training inconsistent with the paper objective.
+            if isinstance(preds, (list, tuple)):
+                loss = sum(self.cal_loss(pred, gt_masks) for pred in preds) / len(preds)
+            else:
+                loss = self.cal_loss(preds, gt_masks)
+        # Cross-view alignment is orthogonal to the pixel loss and should also
+        # regularize the BCE baseline when that branch is enabled.
+        return loss + (self.cross_view_consistency_weight * self._consistency
+                       if self._consistency is not None else 0.0)
 
 
 def weights_init_kaiming(module):
