@@ -60,6 +60,8 @@ parser.add_argument("--cross_view", action=argparse.BooleanOptionalAction, defau
 parser.add_argument("--cross_view_topk", type=float, default=0.2)
 parser.add_argument("--mamba_branch", action=argparse.BooleanOptionalAction, default=False)
 parser.add_argument("--mamba_stage", choices=['e3', 'e4', 'e5'], default='e4')
+parser.add_argument("--cg_ssm", action=argparse.BooleanOptionalAction, default=False)
+parser.add_argument("--cg_ssm_stage", choices=['e3', 'e4', 'e5'], default='e4')
 
 opt = None
 
@@ -82,7 +84,8 @@ def test() -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = SP_KAN(1, 1, mode='test', deepsuper=True,
                  cross_view_branch=opt.cross_view, cross_view_topk=opt.cross_view_topk,
-                 mamba_branch=opt.mamba_branch, mamba_stage=opt.mamba_stage).to(device)
+                 mamba_branch=opt.mamba_branch, mamba_stage=opt.mamba_stage,
+                 cg_ssm=opt.cg_ssm, cg_ssm_stage=opt.cg_ssm_stage).to(device)
     if not os.path.isfile(opt.pth_dir):
         raise FileNotFoundError(
             f'Checkpoint not found: {opt.pth_dir}. Set --pth_dirs to a checkpoint relative to --save_log.'

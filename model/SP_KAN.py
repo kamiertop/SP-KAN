@@ -258,6 +258,66 @@ class MiMISTDBlock(nn.Module):
         return x + self.res_scale * update
 
 
+class CGSSMBlock(nn.Module):
+    """Contrast-Guided Sparse State-Space Modulation block.
+
+    A lightweight infrared-specific alternative to the optional Mamba block.
+    Multi-scale center-surround contrast controls a four-direction recurrent
+    scan, so smooth background regions are propagated weakly while sparse
+    local anomalies receive stronger updates.
+    """
+    def __init__(self, channels, contrast_kernels=(3, 7)):
+        super().__init__()
+        self.norm = LayerNorm3d(channels, LayerNorm_type='WithBias')
+        self.local = nn.Conv2d(channels, channels, 3, padding=1, groups=channels, bias=False)
+        self.value = nn.Conv2d(channels, channels, 1, bias=False)
+        self.gate = nn.Conv2d(channels * (1 + len(contrast_kernels)), channels, 1)
+        self.proj = nn.Conv2d(channels, channels, 1, bias=False)
+        self.ffn = nn.Sequential(nn.Conv2d(channels, channels * 2, 1), nn.GELU(),
+                                 nn.Conv2d(channels * 2, channels, 1))
+        self.contrast_kernels = tuple(int(k) for k in contrast_kernels)
+        self.decay_logits = nn.Parameter(torch.full((1, channels, 1, 1), -1.0))
+        # Small, non-zero LayerScale keeps the identity prior while allowing
+        # all branch parameters to receive gradients from the first step.
+        self.res_scale = nn.Parameter(torch.full((1, channels, 1, 1), 1e-3))
+
+    def _scan(self, x, gate):
+        b, c, h, w = x.shape
+        seq = x.flatten(2).transpose(1, 2)
+        g = gate.flatten(2).transpose(1, 2)
+        decay = torch.sigmoid(self.decay_logits).view(1, c)
+        state = torch.zeros_like(seq[:, 0])
+        forward = []
+        for t in range(seq.shape[1]):
+            state = decay * state + (1.0 - decay) * g[:, t] * seq[:, t]
+            forward.append(state)
+        state = torch.zeros_like(seq[:, 0])
+        backward = []
+        for t in range(seq.shape[1] - 1, -1, -1):
+            state = decay * state + (1.0 - decay) * g[:, t] * seq[:, t]
+            backward.append(state)
+        return (torch.stack(forward, 1) + torch.stack(backward[::-1], 1)).mul_(0.5)
+
+    def forward(self, x):
+        y = self.norm(x)
+        contrasts = [F.relu(y - F.avg_pool2d(y, k, stride=1, padding=k // 2))
+                     for k in self.contrast_kernels]
+        c = torch.cat([y, *contrasts], dim=1)
+        gate = torch.sigmoid(self.gate(c))
+        value = self.value(y)
+        scans = []
+        for dim in (2, 3):
+            for reverse in (False, True):
+                z = value.flip(dim) if reverse else value
+                gz = gate.flip(dim) if reverse else gate
+                out = self._scan(z, gz).transpose(1, 2).reshape_as(value)
+                scans.append(out.flip(dim) if reverse else out)
+        state = self.proj(torch.stack(scans, dim=0).mean(0))
+        update = state + self.local(y)
+        update = update + self.ffn(self.norm(x + update))
+        return x + self.res_scale * update
+
+
 class RelativePositionBias(nn.Module):
     def __init__(self, num_heads, h, w):
         super().__init__()
@@ -529,7 +589,7 @@ class SP_KAN(nn.Module):
     def __init__(self, in_ch=1, out_ch=1, mode='train', deepsuper=True,
                  embed_dims=[256], no_kan=False, drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
                  depths=[1, 1, 1], cross_view_branch=False, cross_view_topk=0.2,
-                 mamba_branch=False, mamba_stage='e4', **kwargs):
+                 mamba_branch=False, mamba_stage='e4', cg_ssm=False, cg_ssm_stage='e4', **kwargs):
         super(SP_KAN, self).__init__()
 
         basic_width = 16
@@ -539,6 +599,9 @@ class SP_KAN(nn.Module):
         self.no_kan = no_kan
         self.cross_view_branch = cross_view_branch
         self.mamba_branch = mamba_branch
+        self.cg_ssm = cg_ssm
+        if cg_ssm_stage not in ('e3', 'e4', 'e5'):
+            raise ValueError("cg_ssm_stage must be one of 'e3', 'e4', or 'e5'")
         if mamba_stage not in ('e3', 'e4', 'e5'):
             raise ValueError("mamba_stage must be one of 'e3', 'e4', or 'e5'")
         self.mamba_stage = mamba_stage
@@ -556,6 +619,9 @@ class SP_KAN(nn.Module):
         self.mim_mamba3 = MiMISTDBlock(filters[2]) if mamba_branch and mamba_stage == 'e3' else nn.Identity()
         self.mim_mamba4 = MiMISTDBlock(filters[3]) if mamba_branch and mamba_stage == 'e4' else nn.Identity()
         self.mim_mamba5 = MiMISTDBlock(filters[4]) if mamba_branch and mamba_stage == 'e5' else nn.Identity()
+        self.cg_ssm3 = CGSSMBlock(filters[2]) if cg_ssm and cg_ssm_stage == 'e3' else nn.Identity()
+        self.cg_ssm4 = CGSSMBlock(filters[3]) if cg_ssm and cg_ssm_stage == 'e4' else nn.Identity()
+        self.cg_ssm5 = CGSSMBlock(filters[4]) if cg_ssm and cg_ssm_stage == 'e5' else nn.Identity()
 
         self.stem = conv_block(in_ch, filters[0])
         self.Conv2 = conv_block(filters[0], filters[1])
@@ -613,16 +679,19 @@ class SP_KAN(nn.Module):
         e3 = self.Conv3(self.maxpool(e2))  # 1 64 64  64
         e3 = self.TransH3(e3)  # 1 64 64  64
         e3 = self.mim_mamba3(e3)
+        e3 = self.cg_ssm3(e3)
 
         e4 = self.Conv4(self.maxpool(e3))  # 1 128 32 32
         e4 = self.TransH4(e4)
         e4 = self.mim_mamba4(e4)
+        e4 = self.cg_ssm4(e4)
         if self.cross_view_branch:
             e4 = self.cross_view_fusion(e4)
 
         e5 = self.Conv5(self.maxpool(e4))  # 1 256 16 16
         e5 = self.TransH5(e5)  # 1 256 16 16
         e5 = self.mim_mamba5(e5)
+        e5 = self.cg_ssm5(e5)
 
         # *****************************************************
         #                          KAN

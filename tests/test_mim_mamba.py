@@ -1,8 +1,9 @@
 import unittest
 import torch
 
-from model.SP_KAN import MiMISTDBlock, SP_KAN
-from util.train_helpers import TargetAwareBoundaryLoss, postprocess_masks
+from model.SP_KAN import MiMISTDBlock, CGSSMBlock, SP_KAN
+from util.losses import TargetAwareBoundaryLoss
+from util.train_helpers import postprocess_masks
 
 
 class MiMISTDTests(unittest.TestCase):
@@ -23,6 +24,15 @@ class MiMISTDTests(unittest.TestCase):
             plain = plain_net(sample)
             mamba = mamba_net(sample)
         self.assertEqual(plain.shape, mamba.shape)
+
+    def test_cg_ssm_shape_and_grad(self):
+        block = CGSSMBlock(4)
+        x = torch.randn(1, 4, 5, 7, requires_grad=True)
+        y = block(x)
+        self.assertEqual(y.shape, x.shape)
+        self.assertTrue(torch.isfinite(y).all())
+        y.mean().backward()
+        self.assertIsNotNone(x.grad)
 
     def test_validation_postprocess_and_loss_shape(self):
         net = SP_KAN(1, 1, mode='train', deepsuper=True, mamba_branch=True).eval()
