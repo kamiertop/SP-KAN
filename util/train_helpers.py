@@ -12,7 +12,7 @@ class Net(nn.Module):
     def __init__(self, model_name, mode, loss_name='bce', cross_view=False,
                  cross_view_noise_std=0.03, cross_view_topk=0.2,
                  cross_view_consistency_weight=0.1, mamba_branch=False,
-                 central_contrast=False):
+                 central_contrast=False, mamba_stage='e4'):
         super().__init__()
         self.model_name = model_name
         if loss_name != 'bce':
@@ -29,7 +29,8 @@ class Net(nn.Module):
         self.mamba_branch = mamba_branch
         self.model = SP_KAN(1, 1, mode=mode, deepsuper=True,
                             cross_view_branch=cross_view, cross_view_topk=cross_view_topk,
-                            mamba_branch=mamba_branch, central_contrast=central_contrast)
+                            mamba_branch=mamba_branch, central_contrast=central_contrast,
+                            mamba_stage=mamba_stage)
         self._consistency = None
         print('input channels: 1')
         print('---------------------------------------------------------------')

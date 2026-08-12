@@ -85,6 +85,8 @@ parser.add_argument("--cross_view_consistency_weight", type=float, default=0.1,
                     help="Weight of clean/noisy prediction consistency loss")
 parser.add_argument("--mamba_branch", action=argparse.BooleanOptionalAction, default=False,
                     help="Enable MiM-ISTD local/global selective state-space block at deepest stage")
+parser.add_argument("--mamba_stage", choices=['e3', 'e4', 'e5'], default='e4',
+                    help="Feature stage for the Mamba block (default: e4)")
 parser.add_argument("--central_contrast", action=argparse.BooleanOptionalAction, default=False,
                     help="Enable MoCoP-style central-difference contrast on decoder skips")
 
@@ -160,7 +162,8 @@ def train() -> None:
               cross_view_topk=opt.cross_view_topk,
               cross_view_consistency_weight=opt.cross_view_consistency_weight,
               mamba_branch=opt.mamba_branch,
-              central_contrast=opt.central_contrast).to(device)
+              central_contrast=opt.central_contrast,
+              mamba_stage=opt.mamba_stage).to(device)
     net.apply(weights_init_kaiming)
     net.train()
     total_loss_list = []
@@ -363,6 +366,7 @@ def build_final_test_command(test_script: str) -> list[str]:
         command.extend(['--cross_view', '--cross_view_topk', str(opt.cross_view_topk)])
     if opt.mamba_branch:
         command.append('--mamba_branch')
+        command.extend(['--mamba_stage', opt.mamba_stage])
     if opt.central_contrast:
         command.append('--central_contrast')
     if opt.gpu_id is not None:

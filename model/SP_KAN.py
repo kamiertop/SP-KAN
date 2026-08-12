@@ -529,7 +529,7 @@ class SP_KAN(nn.Module):
     def __init__(self, in_ch=1, out_ch=1, mode='train', deepsuper=True,
                  embed_dims=[256], no_kan=False, drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm,
                  depths=[1, 1, 1], cross_view_branch=False, cross_view_topk=0.2,
-                 mamba_branch=False, **kwargs):
+                 mamba_branch=False, mamba_stage='e4', **kwargs):
         super(SP_KAN, self).__init__()
 
         basic_width = 16
@@ -539,6 +539,9 @@ class SP_KAN(nn.Module):
         self.no_kan = no_kan
         self.cross_view_branch = cross_view_branch
         self.mamba_branch = mamba_branch
+        if mamba_stage not in ('e3', 'e4', 'e5'):
+            raise ValueError("mamba_stage must be one of 'e3', 'e4', or 'e5'")
+        self.mamba_stage = mamba_stage
         print('Deep-Supervision:', deepsuper)
 
         self.maxpool = nn.MaxPool2d(2)
@@ -550,7 +553,9 @@ class SP_KAN(nn.Module):
         self.TransH3 = CViT(filters[2], 1)
         self.TransH4 = CViT(filters[3], 1)
         self.TransH5 = CViT(filters[4], 1)
-        self.mim_mamba5 = MiMISTDBlock(filters[4]) if mamba_branch else nn.Identity()
+        self.mim_mamba3 = MiMISTDBlock(filters[2]) if mamba_branch and mamba_stage == 'e3' else nn.Identity()
+        self.mim_mamba4 = MiMISTDBlock(filters[3]) if mamba_branch and mamba_stage == 'e4' else nn.Identity()
+        self.mim_mamba5 = MiMISTDBlock(filters[4]) if mamba_branch and mamba_stage == 'e5' else nn.Identity()
 
         self.stem = conv_block(in_ch, filters[0])
         self.Conv2 = conv_block(filters[0], filters[1])
@@ -607,9 +612,11 @@ class SP_KAN(nn.Module):
 
         e3 = self.Conv3(self.maxpool(e2))  # 1 64 64  64
         e3 = self.TransH3(e3)  # 1 64 64  64
+        e3 = self.mim_mamba3(e3)
 
         e4 = self.Conv4(self.maxpool(e3))  # 1 128 32 32
         e4 = self.TransH4(e4)
+        e4 = self.mim_mamba4(e4)
         if self.cross_view_branch:
             e4 = self.cross_view_fusion(e4)
 
